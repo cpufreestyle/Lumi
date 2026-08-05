@@ -1,0 +1,14 @@
+{
+  "name": "lumi",
+  "version": "1.0.0",
+  "description": "Lumi - 动态岛 Apple Music 播放器",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
