@@ -47,12 +47,19 @@ final class CodexController: ObservableObject {
     private let defaultsKey = "codex_api_key"
 
     private init() {
-        apiKey = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
+        // 优先从 Keychain 读取，兼容早期存于 UserDefaults 的密钥
+        apiKey = Keychain.get(defaultsKey)
+               ?? UserDefaults.standard.string(forKey: defaultsKey) ?? ""
     }
 
     func saveAPIKey(_ key: String) {
         apiKey = key
-        UserDefaults.standard.set(key, forKey: defaultsKey)
+        if Keychain.set(key, for: defaultsKey) {
+            // 迁移：清掉旧的明文 UserDefaults 副本
+            UserDefaults.standard.removeObject(forKey: defaultsKey)
+        } else {
+            UserDefaults.standard.set(key, forKey: defaultsKey)
+        }
     }
 
     func executeAction() {

@@ -10,6 +10,8 @@ final class LiveDetectionController: ObservableObject {
     @Published var detections: [DetectionItem] = []
     @Published var showManualSettings: Bool = false
     private var timer: Timer?
+    /// 采集用的后台串行队列（子进程 / AppleScript 均为同步阻塞调用）
+    private let workQueue = DispatchQueue(label: "com.lumi.livedetection", qos: .utility)
 
     // 手动覆盖：label -> 状态（active），nil 表示使用自动检测
     private var manualActive: [String: Bool] = [:]
@@ -18,8 +20,10 @@ final class LiveDetectionController: ObservableObject {
     private let manualActiveKey = "live_manual_active"
     private let manualValueKey  = "live_manual_value"
 
-    struct DetectionItem: Identifiable {
-        let id = UUID()
+    struct DetectionItem: Identifiable, Equatable {
+        /// 使用稳定标识（label 全局唯一），避免每次刷新都生成新 UUID
+        /// 导致 SwiftUI 认为所有行都是新元素而全量重建（会清空正在编辑的输入框）。
+        var id: String { label }
         let icon: String
         let label: String
         let value: String
@@ -49,6 +53,11 @@ final class LiveDetectionController: ObservableObject {
     /// 是否为某项设置了手动覆盖
     func isManual(_ label: String) -> Bool {
         manualActive[label] != nil || manualValue[label] != nil
+    }
+
+    /// 已保存的手动显示文本（未设置则为 nil）
+    func storedManualValue(_ label: String) -> String? {
+        manualValue[label]
     }
 
     /// 设置手动状态（nil 表示清除）
@@ -83,28 +92,54 @@ final class LiveDetectionController: ObservableObject {
     }
 
     func refresh() {
-        DispatchQueue.main.async {
-            let auto = self.collectDetections()
+        // 采集涉及同步子进程（pmset / defaults）与 AppleScript，耗时可达数百毫秒，
+        // 必须放到后台串行队列，否则每 2 秒的轮询会周期性卡住主线程 UI。
+        let snapshotActive = manualActive
+        let snapshotValue  = manualValue
+        // NSApp.effectiveAppearance / NSWorkspace 为主线程 API，先在主线程取快照
+        let uiSnapshot = Self.captureUISnapshot()
+        workQueue.async { [weak self] in
+            guard let self = self else { return }
+            let auto = self.collectDetections(ui: uiSnapshot)
             // 应用手动覆盖
-            var result: [DetectionItem] = []
-            for item in auto {
-                let overridden = self.isManual(item.label)
-                let finalActive = self.manualActive[item.label] ?? item.active
-                let finalValue  = self.manualValue[item.label] ?? item.value
-                result.append(DetectionItem(
+            let result: [DetectionItem] = auto.map { item in
+                let overridden = snapshotActive[item.label] != nil || snapshotValue[item.label] != nil
+                return DetectionItem(
                     icon: item.icon,
                     label: item.label,
-                    value: finalValue,
-                    active: finalActive,
+                    value: snapshotValue[item.label] ?? item.value,
+                    active: snapshotActive[item.label] ?? item.active,
                     category: item.category,
                     manual: overridden
-                ))
+                )
             }
-            self.detections = result
+            DispatchQueue.main.async {
+                // 内容未变化时不赋值，避免无谓的视图刷新
+                guard self.detections != result else { return }
+                self.detections = result
+            }
         }
     }
 
-    private func collectDetections() -> [DetectionItem] {
+    /// 主线程 AppKit 只读快照
+    struct UISnapshot {
+        let darkMode: Bool
+        let frontApp: String?
+    }
+
+    private static func captureUISnapshot() -> UISnapshot {
+        let read: () -> UISnapshot = {
+            let name = NSApp?.effectiveAppearance.name
+            return UISnapshot(
+                darkMode: name == .darkAqua || name == .vibrantDark,
+                frontApp: NSWorkspace.shared.frontmostApplication?.localizedName
+            )
+        }
+        if Thread.isMainThread { return read() }
+        return DispatchQueue.main.sync(execute: read)
+    }
+
+    private func collectDetections(ui: UISnapshot) -> [DetectionItem] {
         var items: [DetectionItem] = []
 
         // 音量
@@ -135,8 +170,7 @@ final class LiveDetectionController: ObservableObject {
                                     manual: false))
 
         // 暗色模式
-        let darkMode = NSApp.effectiveAppearance.name == .darkAqua ||
-                       NSApp.effectiveAppearance.name == .vibrantDark
+        let darkMode = ui.darkMode
         items.append(DetectionItem(icon: darkMode ? "moon.fill" : "sun.max.fill",
                                     label: "外观模式",
                                     value: darkMode ? "深色" : "浅色",
@@ -163,7 +197,7 @@ final class LiveDetectionController: ObservableObject {
                                     manual: false))
 
         // 当前前台应用
-        if let frontApp = NSWorkspace.shared.frontmostApplication?.localizedName {
+        if let frontApp = ui.frontApp {
             items.append(DetectionItem(icon: "app.fill",
                                         label: "当前应用",
                                         value: frontApp,
@@ -209,7 +243,17 @@ final class LiveDetectionController: ObservableObject {
         return CGFloat(brightness)
     }
 
+    /// 专注模式检测代价较高（起子进程解析 plist），且状态变化不频繁，缓存 30 秒
+    private var dndCache: (value: Bool, at: Date)?
+
     private func checkDoNotDisturb() -> Bool {
+        if let c = dndCache, Date().timeIntervalSince(c.at) < 30 { return c.value }
+        let value = readDoNotDisturb()
+        dndCache = (value, Date())
+        return value
+    }
+
+    private func readDoNotDisturb() -> Bool {
         let task = Process()
         task.launchPath = "/usr/bin/defaults"
         task.arguments = ["read", "com.apple.ncprefs", "dnd_prefs"]
@@ -457,12 +501,11 @@ struct LiveManualSettingsView: View {
 struct ManualRow: View {
     @ObservedObject private var detector = LiveDetectionController.shared
     let item: LiveDetectionController.DetectionItem
-    @State private var editingValue: String
-
-    init(item: LiveDetectionController.DetectionItem) {
-        self.item = item
-        _editingValue = State(initialValue: item.value)
-    }
+    /// 输入框文本以 controller 中的手动值为单一数据源。
+    /// 不要用 @State 镜像 item.value：2 秒轮询刷新会重建该行并把用户
+    /// 正在输入的内容重置回自动检测值。
+    @State private var editingValue: String = ""
+    @State private var didLoad = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -510,6 +553,12 @@ struct ManualRow: View {
         .padding(10)
         .background(Color.white.opacity(0.03))
         .cornerRadius(10)
+        .onAppear {
+            // 只在首次出现时填充初值，后续轮询刷新不覆盖用户输入
+            guard !didLoad else { return }
+            didLoad = true
+            editingValue = detector.storedManualValue(item.label) ?? item.value
+        }
     }
 }
 

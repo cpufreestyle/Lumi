@@ -44,6 +44,8 @@ enum LicenseError: Error {
     case invalidFormat
     case verificationFailed
     case invalid
+    /// 旧版 CRC 激活码（LUMI-XXXX-XXXX-XXXX-XXXX），授权体系升级后已失效
+    case legacyKey
 }
 
 // MARK: - 授权管理器
@@ -180,61 +182,62 @@ final class LicenseManager: ObservableObject {
         try? json?.write(to: licenseFileURL, options: .atomic)
     }
 
-    /// 验证激活码 (本地算法验证)
+    // MARK: - 授权公钥（仅验签；私钥绝不存在于本二进制内）
+    /// 部署说明：
+    ///   - 本常量仅为 Ed25519 公钥，无法用于伪造激活码。
+    ///   - 私钥只保存在独立的 license-tool 中（读取 secrets/license_private_key.b64
+    ///     或环境变量 LUMI_LICENSE_PRIVATE_KEY），不参与 App 打包。
+    ///   - 若私钥泄露，需更换密钥对并重新向用户下发激活码。
+    private static let licensePublicKey: Curve25519.Signing.PublicKey? = {
+        let b64 = "OjfYkzCzO8ZjHJxCJOG0gI2O0fMeXtaCWSCcM573HlI="
+        guard let raw = Data(base64Encoded: b64) else { return nil }
+        return try? Curve25519.Signing.PublicKey(rawRepresentation: raw)
+    }()
+
+    /// 验证激活码（Ed25519 验签）
+    /// 格式: LUMI1-<payloadBase64>-<signatureBase64>
+    ///   payload 为 JSON: {"v":1,"life":<Bool>,"exp":<Unix秒, life=true 时为0>,"n":<随机串>}
+    /// 因为签名必须由持有私钥的服务端生成，本地无法伪造（替换原先的纯 CRC16 校验和）。
     private func validateLicenseKey(_ key: String) -> Result<Date?, LicenseError> {
-        let cleaned = key.replacingOccurrences(of: "LUMI-", with: "")
-                          .replacingOccurrences(of: "-", with: "")
-                          .uppercased()
+        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let upper = normalized.uppercased()
 
-        guard cleaned.count == 16 else {
-            return .failure(.invalidFormat)
-        }
-
-        // 验证校验和
-        let segments = stride(from: 0, to: cleaned.count, by: 4).map {
-            String(cleaned[cleaned.index(cleaned.startIndex, offsetBy: $0)..<min(cleaned.index(cleaned.startIndex, offsetBy: $0 + 4), cleaned.endIndex)])
-        }
-
-        guard segments.count == 4 else {
-            return .failure(.invalidFormat)
-        }
-
-        // 第4段是前3段的校验和
-        let data = segments[0] + segments[1] + segments[2]
-        let checksum = segments[3]
-
-        let expected = String(format: "%04X", crc16(data.data(using: .ascii) ?? Data()))
-
-        guard checksum == expected else {
-            return .failure(.verificationFailed)
-        }
-
-        // 解析有效期（编码在第2段中）
-        let validitySegment = segments[1]
-        if validitySegment == "FFFF" {
-            // 永久许可
-            return .success(nil)
-        } else if let months = UInt16(validitySegment, radix: 16), months > 0 {
-            let expiry = Calendar.current.date(byAdding: .month, value: Int(months), to: Date())
-            return .success(expiry)
-        }
-
-        return .failure(.invalid)
-    }
-
-    private func crc16(_ data: Data) -> UInt16 {
-        var crc: UInt16 = 0xFFFF
-        for byte in data {
-            crc ^= UInt16(byte) << 8
-            for _ in 0..<8 {
-                if (crc & 0x8000) != 0 {
-                    crc = (crc << 1) ^ 0x1021
-                } else {
-                    crc <<= 1
-                }
+        // 旧版 CRC 激活码（LUMI-XXXX-XXXX-XXXX-XXXX）：授权体系升级后已作废。
+        // 提前识别，给出专门的迁移提示，而不是笼统的“格式无效”。
+        if upper.hasPrefix("LUMI-") {
+            let body = upper.replacingOccurrences(of: "LUMI-", with: "")
+                            .replacingOccurrences(of: "-", with: "")
+            let isHex = body.allSatisfy { $0.isHexDigit }
+            if body.count == 16, isHex {
+                return .failure(.legacyKey)
             }
         }
-        return crc & 0xFFFF
+
+        let parts = normalized.components(separatedBy: "-")
+        guard parts.count == 3, parts[0].uppercased() == "LUMI1" else {
+            return .failure(.invalidFormat)
+        }
+        guard let payload = Data(base64Encoded: parts[1]),
+              let signature = Data(base64Encoded: parts[2]) else {
+            return .failure(.invalidFormat)
+        }
+        guard let pub = Self.licensePublicKey else {
+            // 公钥缺失属于打包错误，按验证失败处理，绝不放行
+            return .failure(.verificationFailed)
+        }
+        guard pub.isValidSignature(signature, for: payload) else {
+            return .failure(.verificationFailed)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            return .failure(.invalid)
+        }
+        if json["life"] as? Bool == true {
+            return .success(nil)   // 永久许可
+        }
+        if let expTS = json["exp"] as? TimeInterval, expTS > 0 {
+            return .success(Date(timeIntervalSince1970: expTS))
+        }
+        return .failure(.invalid)
     }
 
     private func sha256(_ input: String) -> String {
@@ -247,49 +250,14 @@ final class LicenseManager: ObservableObject {
     private static func errorMessage(for error: LicenseError) -> String {
         switch error {
         case .invalidFormat:
-            return "无效的激活码格式。请输入完整的 LUMI-XXXX-XXXX-XXXX-XXXX 格式激活码。"
+            return "无效的激活码格式。请输入完整的 LUMI1-<payload>-<signature> 格式激活码。"
         case .verificationFailed:
             return "激活码验证失败，请检查输入是否正确。"
         case .invalid:
-            return "激活码无效，无法解析有效期。"
+            return "激活码无效，无法解析授权信息。"
+        case .legacyKey:
+            return "您输入的是旧版激活码，授权体系已升级，旧码已失效。请凭原购买凭证联系 support@lumi.app 免费换取新的 LUMI1- 激活码（权益不变）。"
         }
     }
 }
 
-// MARK: - 激活码生成工具 (供服务端使用)
-enum LicenseKeyGenerator {
-
-    /// 生成激活码
-    /// - Parameters:
-    ///   - months: 有效月数，nil 表示永久
-    /// - Returns: LUMI-XXXX-XXXX-XXXX-XXXX 格式的激活码
-    static func generate(months: Int?) -> String {
-        // 第1段: 随机
-        let seg1 = String(format: "%04X", UInt16.random(in: 0x1000...0xFFFE))
-        // 第2段: 有效期 (FFFF = 永久)
-        let seg2 = months.map { String(format: "%04X", UInt16($0)) } ?? "FFFF"
-        // 第3段: 随机
-        let seg3 = String(format: "%04X", UInt16.random(in: 0x1000...0xFFFE))
-        // 第4段: 校验和
-        let dataStr = seg1 + seg2 + seg3
-        let crc = crc16String(dataStr.data(using: .ascii) ?? Data())
-        let seg4 = String(format: "%04X", crc)
-
-        return "LUMI-\(seg1)-\(seg2)-\(seg3)-\(seg4)"
-    }
-
-    private static func crc16String(_ data: Data) -> UInt16 {
-        var crc: UInt16 = 0xFFFF
-        for byte in data {
-            crc ^= UInt16(byte) << 8
-            for _ in 0..<8 {
-                if (crc & 0x8000) != 0 {
-                    crc = (crc << 1) ^ 0x1021
-                } else {
-                    crc <<= 1
-                }
-            }
-        }
-        return crc & 0xFFFF
-    }
-}

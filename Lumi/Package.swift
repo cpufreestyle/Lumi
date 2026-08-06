@@ -18,6 +18,14 @@ let package = Package(
                 .linkedFramework("IOKit"),
                 .linkedFramework("CryptoKit"),
             ]
+        ),
+        // 激活码签发工具：持私钥签名，独立于 App 目标，不参与 Lumi.app 打包。
+        .executableTarget(
+            name: "license-tool",
+            path: "Sources/license-tool",
+            linkerSettings: [
+                .linkedFramework("CryptoKit")
+            ]
         )
     ]
 )

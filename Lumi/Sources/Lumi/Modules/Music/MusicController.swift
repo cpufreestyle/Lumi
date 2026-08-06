@@ -22,17 +22,23 @@ final class MusicController: ObservableObject {
 
     private var timer: Timer?
     private var lastTrackKey: String = ""
-    /// 已尝试过在线搜索的曲目集合，避免重复请求
+    /// 已尝试过在线搜索的曲目集合，避免重复请求（仅在 scriptQueue 上访问）
     private var onlineSearchedKeys = Set<String>()
+    /// 当前曲目是否已取到歌词（仅在 scriptQueue 上访问，避免跨线程 sync 读 @Published）
+    private var hasLyricsFlag = false
+    /// 当前曲目的名称/艺术家（仅在 scriptQueue 上访问）
+    private var queueTitle = ""
+    private var queueArtist = ""
+    /// AppleScript 为同步阻塞调用（约 100–300ms），必须在后台串行队列执行，
+    /// 否则 1.5 秒轮询会周期性卡住主线程。
+    private let scriptQueue = DispatchQueue(label: "com.lumi.music.script", qos: .utility)
 
     private init() {
-        lyricLog("MusicController init")
         showLyrics = UserDefaults.standard.object(forKey: showLyricsKey) as? Bool ?? true
         startTimer()
     }
 
     private func startTimer() {
-        lyricLog("startTimer scheduled")
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.fetchInfo()
         }
@@ -40,6 +46,7 @@ final class MusicController: ObservableObject {
     }
 
     // MARK: - AppleScript 执行
+    @discardableResult
     private func runScript(_ source: String) -> NSAppleEventDescriptor? {
         var error: NSDictionary?
         guard let script = NSAppleScript(source: source) else { return nil }
@@ -47,13 +54,16 @@ final class MusicController: ObservableObject {
         if let error = error {
             // 常见错误：Music 未运行 / 未授权 -> 忽略
             lyricLog("AppleScript error: \(error)")
-            print("[Music] AppleScript: \(error)")
         }
         return result
     }
 
     // MARK: - 获取当前播放信息
     func fetchInfo() {
+        scriptQueue.async { [weak self] in self?.fetchInfoSync() }
+    }
+
+    private func fetchInfoSync() {
         let src = """
         tell application "Music"
             try
@@ -95,6 +105,13 @@ final class MusicController: ObservableObject {
         let newPosition = Double(parts[5]) ?? 0
         let hasArt = parts[6] == "ART"
 
+        // 曲目是否发生变化（lastTrackKey 仅在 scriptQueue 上读写）
+        let artKey = "\(newTitle)-\(newArtist)"
+        let trackChanged = artKey != lastTrackKey
+        if trackChanged { lastTrackKey = artKey }
+        queueTitle = newTitle
+        queueArtist = newArtist
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.title = newTitle
@@ -107,28 +124,23 @@ final class MusicController: ObservableObject {
             case "paused":  self.playbackState = .paused
             default:        self.playbackState = .stopped
             }
-
-            // 封面：仅在曲目变化时重新获取
-            let artKey = "\(newTitle)-\(newArtist)"
-            if artKey != self.lastTrackKey {
-                self.lastTrackKey = artKey
-                // 切歌先清空歌词，避免短暂显示上一首歌词
+            // 切歌先清空歌词，避免短暂显示上一首的歌词
+            if trackChanged {
                 self.lyrics = ""
-                if hasArt {
-                    self.fetchArtwork()
-                } else {
-                    self.artwork = nil
-                }
+                if !hasArt { self.artwork = nil }
             }
-            // 歌词：每次刷新都尝试获取。Apple Music 的内嵌歌词元数据在切歌后
-            // 可能延迟加载或初始为 stopped 状态导致取不到，因此周期性重试，
-            // 直到成功取到歌词或曲目再次切换时才重置。
-            let hadLyrics = !self.lyrics.isEmpty
-            self.fetchLyrics(force: !hadLyrics || artKey != self.lastTrackKey)
         }
+
+        // 以下均为阻塞式 AppleScript / 网络调用，继续留在 scriptQueue 上执行
+        if trackChanged, hasArt { fetchArtworkSync() }
+
+        // 歌词：Apple Music 的内嵌歌词在切歌后可能延迟加载，因此周期性重试，
+        // 直到取到歌词或曲目再次切换。
+        if trackChanged { hasLyricsFlag = false }
+        fetchLyricsSync(title: newTitle, artist: newArtist, force: !hasLyricsFlag)
     }
 
-    private func fetchArtwork() {
+    private func fetchArtworkSync() {
         let src = """
         tell application "Music"
             try
@@ -147,14 +159,24 @@ final class MusicController: ObservableObject {
     }
 
     // MARK: - 歌词获取
-    /// force=true 时无论当前是否有歌词都重新请求（用于切歌或歌词为空时重试）；
-    /// force=false 时若已有歌词则跳过，避免无谓的 AppleScript 调用。
+    /// 外部入口：调度到 scriptQueue 执行，避免在主线程同步执行 AppleScript。
     func fetchLyrics(force: Bool = true) {
-        // 已有歌词且非强制刷新 -> 跳过
-        if !force, !lyrics.isEmpty { return }
+        scriptQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.fetchLyricsSync(title: self.queueTitle,
+                                 artist: self.queueArtist,
+                                 force: force)
+        }
+    }
+
+    /// 必须在 scriptQueue 上调用。
+    /// force=false 且当前曲目已取到歌词时跳过，避免无谓的 AppleScript 调用。
+    private func fetchLyricsSync(title: String, artist: String, force: Bool) {
+        if !force, hasLyricsFlag { return }
 
         let embedded = getEmbeddedLyrics()
         if !embedded.isEmpty {
+            hasLyricsFlag = true
             DispatchQueue.main.async { [weak self] in self?.lyrics = embedded }
             return
         }
@@ -162,13 +184,15 @@ final class MusicController: ObservableObject {
         // 内嵌歌词为空：Apple Music 的流媒体订阅歌曲大多如此（lyrics 属性恒为空）。
         // 回退到在线歌词（lrclib 免费 API，按 歌名+歌手 搜索）。每首歌只搜一次。
         let key = "\(title)-\(artist)"
-        lyricLog("fetchLyrics force=\(force) title=\"\(title)\" cached=\(onlineSearchedKeys.contains(key))")
         if force, !title.isEmpty, !onlineSearchedKeys.contains(key) {
             onlineSearchedKeys.insert(key)
-            lyricLog("-> online search for \(title)-\(artist)")
+            // 限制缓存容量，避免长期运行无上限增长
+            if onlineSearchedKeys.count > 200 { onlineSearchedKeys.removeAll() }
             fetchLyricsOnline(artist: artist, title: title)
         }
     }
+
+
 
     /// 读取 Apple Music 内嵌歌词（本地导入文件才有，流媒体通常为空）
     private func getEmbeddedLyrics() -> String {
@@ -225,12 +249,14 @@ final class MusicController: ObservableObject {
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             let result = self?.parseLyricsFromData(data) ?? ""
             if !result.isEmpty {
-                self?.lyricLog("命中歌词 artist=\(artist) track=\(t) len=\(result.count)")
                 DispatchQueue.main.async {
                     // 写回前确认仍是同一首歌，避免串词
-                    if self?.title == originalTitle, self?.artist == originalArtist, self?.lyrics.isEmpty == true {
-                        self?.lyrics = result
-                    }
+                    guard let self = self,
+                          self.title == originalTitle,
+                          self.artist == originalArtist,
+                          self.lyrics.isEmpty else { return }
+                    self.lyrics = result
+                    self.scriptQueue.async { self.hasLyricsFlag = true }
                 }
             } else {
                 // 当前候选失败，尝试下一个
@@ -262,40 +288,42 @@ final class MusicController: ObservableObject {
         return (!plain.isEmpty ? plain : synced).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// 调试日志：写入 ~/lumi_lyrics.log，便于排查歌词拉取情况
+    /// 调试日志：仅 DEBUG 构建输出到控制台。
+    /// （原实现每次调用都向 ~/lumi_lyrics.log 追加写盘，属于生产环境的无谓 IO。）
     private func lyricLog(_ msg: String) {
-        let path = (NSHomeDirectory() as NSString).appendingPathComponent("lumi_lyrics.log")
-        let line = "\(Date()) [Lumi] \(msg)\n"
-        if let data = line.data(using: .utf8) {
-            if let fh = FileHandle(forWritingAtPath: path) {
-                fh.seekToEndOfFile()
-                fh.write(data)
-                try? fh.close()
-            } else {
-                try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
-            }
-        }
+        #if DEBUG
+        print("[Lumi/Music] \(msg)")
+        #endif
     }
 
     // MARK: - 控制
     var isPlaying: Bool { playbackState == .playing }
 
     func togglePlayPause() {
-        runScript("tell application \"Music\"\nplaypause\nend tell")
+        scriptQueue.async { [weak self] in
+            self?.runScript("tell application \"Music\"\nplaypause\nend tell")
+        }
     }
 
-    func nextTrack() {
-        runScript("tell application \"Music\"\nnext track\nend tell")
-        lastTrackKey = ""; artwork = nil
-    }
+    func nextTrack() { switchTrack("next track") }
 
-    func previousTrack() {
-        runScript("tell application \"Music\"\nprevious track\nend tell")
-        lastTrackKey = ""; artwork = nil
+    func previousTrack() { switchTrack("previous track") }
+
+    private func switchTrack(_ command: String) {
+        artwork = nil
+        scriptQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.runScript("tell application \"Music\"\n\(command)\nend tell")
+            self.lastTrackKey = ""
+            self.hasLyricsFlag = false
+            self.fetchInfoSync()
+        }
     }
 
     func seek(to time: TimeInterval) {
         let t = Int(time)
-        runScript("tell application \"Music\"\nset player position to \(t)\nend tell")
+        scriptQueue.async { [weak self] in
+            self?.runScript("tell application \"Music\"\nset player position to \(t)\nend tell")
+        }
     }
 }

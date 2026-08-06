@@ -19,6 +19,8 @@ final class ClaudeCodeController: ObservableObject {
         let role: Role
         let content: String
         let timestamp: Date
+        /// 开场白为 UI 占位提示，不应进入发给 API 的对话历史
+        var isGreeting: Bool = false
 
         enum Role {
             case user, assistant
@@ -26,17 +28,34 @@ final class ClaudeCodeController: ObservableObject {
     }
 
     private init() {
-        apiKey = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
+        // 优先从 Keychain 读取，兼容早期存于 UserDefaults 的密钥
+        apiKey = Keychain.get(defaultsKey)
+               ?? UserDefaults.standard.string(forKey: defaultsKey) ?? ""
         if !apiKey.isEmpty {
-            messages.append(CCMessage(role: .assistant, content: "你好！我是 Claude Code 助手。我可以帮你写代码、调试问题、解释技术概念。请告诉我你需要什么帮助？", timestamp: Date()))
+            messages.append(CCMessage(
+                role: .assistant,
+                content: "你好！我是 Claude Code 助手。我可以帮你写代码、调试问题、解释技术概念。请告诉我你需要什么帮助？",
+                timestamp: Date(),
+                isGreeting: true
+            ))
         }
     }
 
     func saveAPIKey(_ key: String) {
         apiKey = key
-        UserDefaults.standard.set(key, forKey: defaultsKey)
+        if Keychain.set(key, for: defaultsKey) {
+            // 迁移：清掉旧的明文 UserDefaults 副本
+            UserDefaults.standard.removeObject(forKey: defaultsKey)
+        } else {
+            UserDefaults.standard.set(key, forKey: defaultsKey)
+        }
         if messages.isEmpty {
-            messages.append(CCMessage(role: .assistant, content: "API Key 已保存。你好！我是 Claude Code 助手。我可以帮你写代码、调试问题、解释技术概念。请告诉我你需要什么帮助？", timestamp: Date()))
+            messages.append(CCMessage(
+                role: .assistant,
+                content: "API Key 已保存。你好！我是 Claude Code 助手。我可以帮你写代码、调试问题、解释技术概念。请告诉我你需要什么帮助？",
+                timestamp: Date(),
+                isGreeting: true
+            ))
         }
     }
 
@@ -52,25 +71,16 @@ final class ClaudeCodeController: ObservableObject {
         inputText = ""
         isLoading = true
 
-        // 构建对话历史
-        var apiMessages: [[String: Any]] = [
-            ["role": "user", "content": userMsg]
-        ]
-
-        // 包含最近 10 条上下文
-        let context = Array(messages.suffix(12).dropLast(1))
-        if !context.isEmpty {
-            var ctx: [[String: Any]] = []
-            for msg in context {
-                let role = msg.role == .user ? "user" : "assistant"
-                ctx.append(["role": role, "content": msg.content])
-            }
-            apiMessages = ctx + apiMessages
-        }
+        // 构建发给 Anthropic 的对话历史。
+        // 关键约束：Messages API 要求消息以 user 开头、user/assistant 严格交替。
+        // 开场白(isGreeting)是纯 UI 提示，必须从历史中剔除，否则首条真实消息
+        // 会带着一条 assistant 开场白 -> 首条即为 assistant -> API 报 400。
+        var apiMessages = buildAPIMessages(currentUser: userMsg)
 
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 2048,
+            "system": "你是一个专业的编程助手 Claude Code，擅长编写、调试与解释代码。回答简洁、准确，必要时给出可运行的代码示例。",
             "messages": apiMessages
         ]
 
@@ -119,6 +129,33 @@ final class ClaudeCodeController: ObservableObject {
 
     func clearChat() {
         messages.removeAll()
+    }
+
+    /// 将本地消息历史整理为符合 Anthropic 约束的 messages 数组：
+    /// - 剔除开场白(isGreeting)
+    /// - 确保以 user 开头
+    /// - 合并连续同角色，保证 user/assistant 严格交替
+    private func buildAPIMessages(currentUser: String) -> [[String: Any]] {
+        var turns: [(role: String, content: String)] = []
+        for m in messages where !m.isGreeting {
+            turns.append((m.role == .user ? "user" : "assistant", m.content))
+        }
+        // 去掉开头多余的 assistant（若有）
+        while let first = turns.first, first.role == "assistant" {
+            turns.removeFirst()
+        }
+        // 合并连续同角色，保证交替
+        var cleaned: [(role: String, content: String)] = []
+        for t in turns {
+            if let last = cleaned.last, last.role == t.role {
+                cleaned[cleaned.count - 1].content += "\n" + t.content
+            } else {
+                cleaned.append(t)
+            }
+        }
+        var result: [[String: Any]] = cleaned.map { ["role": $0.role, "content": $0.content] }
+        result.append(["role": "user", "content": currentUser])
+        return result
     }
 }
 

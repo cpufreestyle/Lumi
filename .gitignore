@@ -7,6 +7,9 @@ node_modules/
 *.pem
 *.p8
 
+# 激活码私钥（license-tool 使用，绝不进 App 二进制 / 不提交）
+Lumi/secrets/
+
 # Swift 构建产物
 .build/
 *.xcodeproj/
