@@ -174,7 +174,16 @@ launch() {
 case "${1:-}" in
   build)   build; package ;;
   launch)  launch ;;
-  restart) pkill -x Lumi 2>/dev/null || true; sleep 1; build; launch ;;
+  reopen|restart)
+    # 重新构建并重启：先退出旧实例，再打开新构建。
+    # 用 osascript 优雅退出（bundle id），失败则回退到 pgrep+kill。
+    osascript -e 'tell application id "com.lumi.app" to quit' 2>/dev/null || \
+      for pid in $(pgrep -f "Contents/MacOS/Lumi"); do kill "$pid" 2>/dev/null; done
+    build
+    osascript -e 'tell application id "com.lumi.app" to activate' 2>/dev/null
+    open "$APP"
+    echo "REOPENED_OK" ;;
+  check)
   check)
     pids=$(pgrep -f "Contents/MacOS/Lumi")
     [ -n "$pids" ] && echo "RUNNING pids=$pids" || echo "NOT_RUNNING" ;;
