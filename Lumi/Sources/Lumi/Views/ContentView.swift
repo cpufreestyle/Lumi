@@ -18,11 +18,10 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 命中区域裁剪为圆角形状：透明的四个直角不再响应 hover / 点击。
         // 只改命中区域、不用 clipShape，以免把内容自带的 .shadow 一并裁掉。
+        // 注意：hover 命中只挂在收缩态胶囊(CollapsedView)上，不挂在整个窗口，
+        // 否则鼠标只是靠近顶部热区、尚未碰到岛本身就会展开预览。
         .contentShape(RoundedRectangle(cornerRadius: state.isExpanded ? 22 : 21))
         .background(WindowAccessor())
-        .onHover { inside in
-            AppState.shared.isHovering = inside
-        }
     }
 }
 
@@ -36,6 +35,12 @@ struct PeekView: View {
                 .frame(maxHeight: .infinity)
             CollapsedView()
                 .padding(.bottom, 6)
+        }
+        // 鼠标在预览面板（132 高）内移动时，即便离开内部胶囊条也不要收起；
+        // 由这里统一维持 isHovering=true，离开整个面板才切回收缩态。
+        .contentShape(RoundedRectangle(cornerRadius: 21))
+        .onHover { inside in
+            AppState.shared.isHovering = inside
         }
     }
 }
@@ -121,6 +126,12 @@ struct CollapsedView: View {
                 )
         )
         .shadow(color: .black.opacity(0.3), radius: 15, y: 5)
+        // 只有鼠标真正进入收缩胶囊（42 高那条）才标记 isHovering，
+        // 从而展开预览；整窗 onHover 会在靠近顶部热区时误触发，所以不挂在那里。
+        .contentShape(RoundedRectangle(cornerRadius: 21))
+        .onHover { inside in
+            AppState.shared.isHovering = inside
+        }
         .onTapGesture {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                 AppState.shared.isExpanded = true

@@ -134,6 +134,9 @@ struct MusicExpandedView: View {
             controlButtons
                 .padding(.top, 12)
 
+            // 音量控制
+            volumeSection
+
             // 音频可视化频谱
             if music.isPlaying {
                 AudioVisualizer()
@@ -231,13 +234,22 @@ struct MusicExpandedView: View {
 
     // MARK: 播放控制
     var controlButtons: some View {
-        HStack(spacing: 36) {
+        HStack(spacing: 28) {
             Button(action: { MusicController.shared.previousTrack() }) {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 20))
                     .foregroundColor(.white.opacity(0.8))
             }
             .buttonStyle(.plain)
+            .help("上一首")
+
+            Button(action: { MusicController.shared.skip(by: -15) }) {
+                Image(systemName: "gobackward.15")
+                    .font(.system(size: 20))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+            .help("快退 15 秒")
 
             Button(action: { MusicController.shared.togglePlayPause() }) {
                 Image(systemName: music.isPlaying ? "pause.fill" : "play.fill")
@@ -257,13 +269,45 @@ struct MusicExpandedView: View {
             }
             .buttonStyle(.plain)
 
+            Button(action: { MusicController.shared.skip(by: 15) }) {
+                Image(systemName: "goforward.15")
+                    .font(.system(size: 20))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+            .help("快进 15 秒")
+
             Button(action: { MusicController.shared.nextTrack() }) {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 20))
                     .foregroundColor(.white.opacity(0.8))
             }
             .buttonStyle(.plain)
+            .help("下一首")
         }
+    }
+
+    // MARK: 音量控制
+    var volumeSection: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "speaker.wave.1.fill")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.5))
+            Slider(value: Binding(
+                get: { Double(max(0, music.volume)) },
+                set: { music.setVolume(Int($0)) }
+            ), in: 0...100, step: 1)
+            .frame(maxWidth: .infinity)
+            Image(systemName: "speaker.wave.3.fill")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.5))
+            Text("\(max(0, music.volume))")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 26, alignment: .trailing)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 6)
     }
 
     func formatTime(_ t: TimeInterval) -> String {

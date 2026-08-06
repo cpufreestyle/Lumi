@@ -27,6 +27,15 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("CryptoKit")
             ]
+        ),
+        // 单元测试目标：仅依赖 Foundation/CryptoKit，不引入 AppKit/SwiftUI/GUI 框架，
+        // 以保证 `swift test` 在 CI/命令行下无需登录会话即可编译运行。
+        .testTarget(
+            name: "LumiTests",
+            dependencies: [
+                .target(name: "Lumi")
+            ],
+            path: "Tests/LumiTests"
         )
     ]
 )

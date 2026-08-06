@@ -46,14 +46,17 @@ final class IslandWindowController: NSObject {
     /// 记录上一次鼠标是否处于热区，用于区分"重新进入"与"停留在热区"
     private var wasInZone: Bool = false
 
-    /// 动态岛触发热区：屏幕顶部中央的一条不可见横带
-    private let hotZoneHeight: CGFloat = 28
-    /// 热区宽度（内置屏：与刘海/胶囊同宽区域）
-    private let hotZoneWidth: CGFloat = 320
+    /// 动态岛触发热区：屏幕顶部中央的一条不可见横带。
+    /// 注意：内置屏（带刘海）的热区不再写死为固定 28×320，而是根据
+    /// 当前 MacBook 型号的刘海实际度量（safeAreaInsets）精确计算，
+    /// 以贴合不同机型（14"/16"，不同缩放比）的真实刘海尺寸与位置。
+    /// 下面这两个值仅作为「无刘海机型 / 合盖外接屏」的兜底热区尺寸。
+    private let fallbackHotZoneHeight: CGFloat = 20
+    private let fallbackHotZoneWidth: CGFloat = 320
 
     /// 合盖回退到外接屏时的热区尺寸。
     /// 外接屏顶部是普通菜单栏（右侧状态栏图标、左侧应用菜单都在此），
-    /// 沿用内置屏的 28×320 会频繁误触发，故显著收窄收薄。
+    /// 沿用内置屏的刘海热区会频繁误触发，故显著收窄收薄。
     private let externalHotZoneHeight: CGFloat = 4
     private let externalHotZoneWidth: CGFloat = 160
 
@@ -196,6 +199,47 @@ final class IslandWindowController: NSObject {
             .store(in: &cancellables)
     }
 
+    /// 计算某块屏幕的"动态岛"热区矩形。
+    /// - 带刘海的内置屏：热区精确贴合刘海实际区域——
+    ///   高度取 `safeAreaInsets.top`（刘海顶部到菜单栏/安全区的距离），
+    ///   宽度取 `2 * safeAreaInsets.left`（刘海左右安全区之和，即刘海真实宽度），
+    ///   水平居中于整屏（`screen.frame` 中心，而非 visibleFrame，因刘海在整屏中线）。
+    ///   这样不同 MacBook 型号（14"/16"，不同显示缩放）都会对齐到真实刘海，
+    ///   而不是写死的一条横带，避免"还没碰到岛就触发"。
+    /// - 无刘海 / 外接屏（合盖场景）：回退到收窄的外部热区。
+    private func notchHotZone(for screen: NSScreen) -> CGRect {
+        // 合盖 / 外接屏：用保守的小热区
+        guard isBuiltIn(screen) else {
+            let f = screen.visibleFrame
+            let w = externalHotZoneWidth
+            let h = externalHotZoneHeight
+            return CGRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
+        }
+
+        let hasNotch = if #available(macOS 12.0, *), screen.safeAreaInsets.top > 0 {
+            true
+        } else { false }
+
+        guard hasNotch else {
+            // 内置屏但无刘海（如旧款 Air/Pro）：用兜底热区
+            let f = screen.visibleFrame
+            let w = fallbackHotZoneWidth
+            let h = fallbackHotZoneHeight
+            return CGRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
+        }
+
+        let frame = screen.frame
+        let inset = screen.safeAreaInsets
+        // 刘海高度：顶边到安全区顶部的距离
+        let notchH = max(inset.top, 18)
+        // 刘海宽度：左右安全区之和（刘海真实宽度）；太窄时兜底到 320
+        let notchW = max(inset.left + inset.right, 240)
+        let zoneX = frame.midX - notchW / 2
+        // y：从屏幕顶边往下 notchH（刘海占据整条顶部）
+        let zoneY = frame.maxY - notchH
+        return CGRect(x: zoneX, y: zoneY, width: notchW, height: notchH)
+    }
+
     /// 判断鼠标是否进入"动态岛"热区（顶部中央横带），据此弹出/收起
     private func evaluateHotZone() {
         guard !AppState.shared.isExpanded else { return }
@@ -210,16 +254,9 @@ final class IslandWindowController: NSObject {
             return
         }
 
-        let f = screen.visibleFrame
-        // 热区：顶部一条水平居中的横带。
-        // 内置屏用 28×320（贴合刘海区域）；合盖回退到外接屏时改用 4×160，
-        // 因为外接屏顶部是普通菜单栏，大热区会频繁误触发。
-        let builtIn = isBuiltIn(screen)
-        let zoneH = builtIn ? hotZoneHeight : externalHotZoneHeight
-        let zoneW = builtIn ? hotZoneWidth : externalHotZoneWidth
-        let zoneX = f.midX - zoneW / 2
-        let inZone = mouse.y >= f.maxY - zoneH
-                   && mouse.x >= zoneX && mouse.x <= zoneX + zoneW
+        // 热区按当前屏幕（机型）的刘海实际度量计算，精确贴合。
+        let zone = notchHotZone(for: screen)
+        let inZone = zone.contains(mouse)
 
         if !AppState.shared.islandEnabled {
             // 已隐藏：只有"离开热区后重新进入"才会重新显示（触碰动态岛即显示）

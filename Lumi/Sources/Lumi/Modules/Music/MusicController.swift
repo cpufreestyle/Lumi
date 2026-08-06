@@ -52,6 +52,8 @@ final class MusicController: ObservableObject {
         showLyrics = UserDefaults.standard.object(forKey: showLyricsKey) as? Bool ?? true
         lyricsOffset = UserDefaults.standard.object(forKey: lyricsOffsetKey) as? TimeInterval ?? 0
         startTimer()
+        loadVolumeIfNeeded()
+        refreshVolume()
     }
 
     private func startTimer() {
@@ -538,6 +540,7 @@ final class MusicController: ObservableObject {
             self.lastTrackKey = ""
             self.hasLyricsFlag = false
             self.hasArtFlag = false
+            self.refreshVolume()
             self.fetchInfoSync()
         }
     }
@@ -546,6 +549,77 @@ final class MusicController: ObservableObject {
         let t = Int(time)
         scriptQueue.async { [weak self] in
             self?.runScript("tell application \"Music\"\nset player position to \(t)\nend tell")
+        }
+    }
+
+    /// 相对快进/快退 delta 秒（正为快进，负为快退）。基于当前 position 计算目标位置并跳转。
+    func skip(by delta: TimeInterval) {
+        scriptQueue.async { [weak self] in
+            guard let self = self else { return }
+            let src = """
+            tell application "Music"
+                try
+                    if player state is playing or player state is paused then
+                        set cur to player position
+                        set dur to duration of current track
+                        set target to cur + \(Int(delta))
+                        if target < 0 then set target to 0
+                        if target > dur then set target to dur
+                        set player position to target
+                    end if
+                end try
+            end tell
+            """
+            self.runScript(src)
+            // 跳转后立刻刷新一次进度，避免界面停留在旧位置
+            self.fetchInfoSync()
+        }
+    }
+
+    // MARK: 音量
+    @Published var volume: Int = -1 {
+        didSet {
+            guard volume >= 0 else { return }
+            UserDefaults.standard.set(volume, forKey: volumeKey)
+        }
+    }
+    private let volumeKey = "music_volume"
+
+    /// 启动时读取持久化的音量（-1 表示尚未初始化，由 UI 在首次拿到真实音量后回填）。
+    func loadVolumeIfNeeded() {
+        if volume < 0 {
+            let saved = UserDefaults.standard.object(forKey: volumeKey) as? Int
+            volume = saved ?? -1
+        }
+    }
+
+    /// 读取 Music.app 当前音量（0-100）。在主线程回调以避免跨线程读写 @Published。
+    func refreshVolume() {
+        scriptQueue.async { [weak self] in
+            guard let self = self else { return }
+            let src = """
+            tell application "Music"
+                try
+                    return sound volume as text
+                end try
+                return ""
+            end tell
+            """
+            guard let desc = self.runScript(src), let raw = desc.stringValue,
+                  let v = Int(raw.trimmingCharacters(in: .whitespaces)) else { return }
+            let clamped = max(0, min(100, v))
+            DispatchQueue.main.async {
+                // 仅当未手动设置过时，用真实值回填，避免覆盖用户拖动
+                if self.volume < 0 { self.volume = clamped }
+            }
+        }
+    }
+
+    func setVolume(_ v: Int) {
+        let clamped = max(0, min(100, v))
+        volume = clamped
+        scriptQueue.async { [weak self] in
+            self?.runScript("tell application \"Music\"\nset sound volume to \(clamped)\nend tell")
         }
     }
 }
