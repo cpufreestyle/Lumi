@@ -13,6 +13,8 @@ final class MusicController: ObservableObject {
     @Published var duration: TimeInterval = 0
     @Published var artwork: NSImage? = nil
     @Published var lyrics: String = ""
+    /// 无时间轴纯文本歌词的整段翻译（双语模式时由联网翻译补全）。
+    @Published var lyricsTranslation: String = ""
     /// 带时间轴的歌词（Apple Music 官方歌词）。为空时 UI 退化为纯文本展示。
     @Published var syncedLines: [SyncedLine] = []
     @Published var showLyrics: Bool = true {
@@ -20,13 +22,79 @@ final class MusicController: ObservableObject {
     }
     private let showLyricsKey = "music_show_lyrics"
 
+    /// 双语歌词模式。
+    /// - `.off`：仅显示原文（默认历史行为）。
+    /// - `.auto`：若歌词自带双语（一行内包含两种语言）则显示对照；否则自动联网翻译补全。
+    /// - `.on`：无论是否自带，都联网翻译补全另一语言（与 auto 行为几乎一致，预留「强制」语义）。
+    enum BilingualMode: Int, CaseIterable {
+        case off = 0, auto = 1, on = 2
+        var label: String {
+            switch self {
+            case .off:  return "原文"
+            case .auto: return "双语·自动"
+            case .on:   return "双语·翻译"
+            }
+        }
+    }
+    @Published var bilingualMode: BilingualMode = .auto {
+        didSet {
+            UserDefaults.standard.set(bilingualMode.rawValue, forKey: bilingualKey)
+            // 切换模式后，对当前已载入的歌词立即应用（重新翻译/回退）
+            reapplyBilingualForCurrentTrack()
+        }
+    }
+    private let bilingualKey = "music_bilingual_mode"
+
     /// 歌词时间轴校准偏移（秒）。lrclib/社区 LRC 的时间轴常以 Apple Music 基准标注，
     /// 但实际播放位置可能整体早/晚数秒（前奏 offset 差异），导致逐行高亮错位。
     /// 正值表示歌词时间轴比实际播放「快」了这么多，需要把匹配基准往后推。
     @Published var lyricsOffset: TimeInterval = 0 {
-        didSet { UserDefaults.standard.set(lyricsOffset, forKey: lyricsOffsetKey) }
+        didSet {
+            UserDefaults.standard.set(lyricsOffset, forKey: lyricsOffsetKey)
+            // 按曲目记忆校准：用户拖动滑块/点击对齐后，记下当前曲的偏移，
+            // 下次再播放同一首自动套用，避免每次都重新调（解决「时间轴不对」反复出现）。
+            let key = currentTrackKey
+            guard !key.isEmpty else { return }
+            scriptQueue.async { [weak self] in
+                guard let self = self else { return }
+                self.offsetByTrack[key] = self.lyricsOffset
+                UserDefaults.standard.set(self.offsetByTrack, forKey: self.offsetByTrackKey)
+            }
+        }
     }
     private let lyricsOffsetKey = "music_lyrics_offset"
+    /// 按曲目保存的歌词时间轴偏移（title|artist -> offset 秒），用于跨会话记忆校准结果。
+    private var offsetByTrack: [String: TimeInterval] = [:]
+    private let offsetByTrackKey = "music_lyrics_offset_by_track"
+    /// 当前曲目标识（title|artist），用作 offset 记忆的 key；含中文/特殊字符时用
+    /// percent-encoding 保证 UserDefaults 字典 key 稳定。
+    private var currentTrackKey: String {
+        let raw = "\(title)|\(artist)"
+        return raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? raw
+    }
+
+    /// 当前时刻正在唱的那一句歌词（用于收缩态小胶囊展示）。
+    /// 基于 syncedLines 时间轴 + 校准偏移取当前行；无时间轴或前奏时回退整段歌词。
+    /// 从整首歌词拼接改为「当前行」，避免胶囊里滚动显示全部歌词显得不准。
+    /// 双语模式下，若当前行已解析出 translation 则原文 + 翻译拼接（用「 · 」分隔）。
+    var currentLineText: String {
+        let t = currentTime - lyricsOffset
+        var cur: SyncedLine?
+        for line in syncedLines where line.time >= 0 {
+            if line.time <= t { cur = line }
+            else { break }
+        }
+        if let line = cur {
+            let text = line.text
+            if bilingualMode != .off, let tr = line.translation, !tr.isEmpty {
+                return "\(text) · \(tr)"
+            }
+            return text
+        }
+        // 无时间轴（纯文本歌词）：整段兜底
+        if !lyrics.isEmpty { return lyrics }
+        return ""
+    }
 
     enum PlaybackState { case playing, paused, stopped }
 
@@ -44,13 +112,22 @@ final class MusicController: ObservableObject {
     /// 当前曲目的名称/艺术家（仅在 scriptQueue 上访问）
     private var queueTitle = ""
     private var queueArtist = ""
+    /// 歌词翻译缓存：原文 -> 翻译。避免同一句歌词反复请求翻译 API（省流量 + 防限流）。
+    /// 仅在 scriptQueue 上写入；主线程读取用于重建 syncedLines（已同步过）。
+    private var translationCache: [String: String] = [:]
     /// AppleScript 为同步阻塞调用（约 100–300ms），必须在后台串行队列执行，
     /// 否则 1.5 秒轮询会周期性卡住主线程。
     private let scriptQueue = DispatchQueue(label: "com.lumi.music.script", qos: .utility)
+    /// 专辑封面获取专用队列（高优先级）。封面原始数据较大，且不应与歌词 AppleScript /
+    /// 翻译网络请求争用同一队列，否则会拖慢封面出现、产生明显延迟。
+    private let artworkQueue = DispatchQueue(label: "com.lumi.music.artwork", qos: .userInitiated)
 
     private init() {
         showLyrics = UserDefaults.standard.object(forKey: showLyricsKey) as? Bool ?? true
         lyricsOffset = UserDefaults.standard.object(forKey: lyricsOffsetKey) as? TimeInterval ?? 0
+        offsetByTrack = UserDefaults.standard.dictionary(forKey: offsetByTrackKey) as? [String: TimeInterval] ?? [:]
+        let savedBilingual = UserDefaults.standard.object(forKey: bilingualKey) as? Int ?? BilingualMode.auto.rawValue
+        bilingualMode = BilingualMode(rawValue: savedBilingual) ?? .auto
         startTimer()
         loadVolumeIfNeeded()
         refreshVolume()
@@ -145,17 +222,27 @@ final class MusicController: ObservableObject {
             // 切歌先清空歌词，避免短暂显示上一首的歌词
             if trackChanged {
                 self.lyrics = ""
+                self.lyricsTranslation = ""
                 self.syncedLines = []
                 if !hasArt { self.artwork = nil }
+                // 载入该曲目此前校准过的时间轴偏移（按曲目记忆，解决反复「时间轴不对」）
+                let rawKey = "\(newTitle)|\(newArtist)"
+                let key = rawKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? rawKey
+                let savedOffset = self.offsetByTrack[key] ?? 0
+                if savedOffset != self.lyricsOffset { self.lyricsOffset = savedOffset }
             }
         }
 
         // 以下均为阻塞式 AppleScript / 网络调用，继续留在 scriptQueue 上执行
         // 封面：Music 在切歌瞬间可能尚未加载好 artwork（hasArt 暂时为 false），
         // 因此周期性重试直到取到，避免封面长期缺失/延迟。
-        if trackChanged { hasArtFlag = false }
+        // 封面获取放到独立的 artworkQueue（高优先级），与歌词 AppleScript / 翻译
+        // 网络请求并行，避免被同一队列阻塞而产生明显延迟。
+        if trackChanged {
+            artworkQueue.async { [weak self] in self?.hasArtFlag = false }
+        }
         if (trackChanged && hasArt) || (!hasArtFlag && hasArt) {
-            fetchArtworkSync()
+            artworkQueue.async { [weak self] in self?.fetchArtworkSync() }
         }
 
         // 歌词：Apple Music 的内嵌歌词在切歌后可能延迟加载，因此周期性重试，
@@ -177,10 +264,21 @@ final class MusicController: ObservableObject {
         """
         guard let desc = runScript(src) else { return }
         let data = desc.data
-        if !data.isEmpty, let img = NSImage(data: data) {
-            DispatchQueue.main.async { [weak self] in self?.artwork = img }
-            hasArtFlag = true
-        }
+        guard !data.isEmpty else { return }
+        // 后台解码并缩放为 280px 方图，降低大尺寸原图对主线程/内存的压力，
+        // 让封面出现更快、UI 刷新更轻量。
+        guard let original = NSImage(data: data),
+              let cg = original.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let size = NSSize(width: 280, height: 280)
+        let thumb = NSImage(size: size)
+        thumb.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        NSImage(cgImage: cg, size: original.size).draw(in: NSRect(origin: .zero, size: size),
+                                                       from: NSRect(origin: .zero, size: original.size),
+                                                       operation: .copy, fraction: 1)
+        thumb.unlockFocus()
+        DispatchQueue.main.async { [weak self] in self?.artwork = thumb }
+        hasArtFlag = true
     }
 
     // MARK: - 歌词获取
@@ -399,6 +497,8 @@ final class MusicController: ObservableObject {
     }
 
     /// 把 LRC 文本（含 [mm:ss.xx] 时间戳）解析为带时间轴的 SyncedLine 数组。
+    /// 解析时会尝试拆分「自带双语」行（一行内同时含两种语言，如 `原文 / 翻译`），
+    /// 拆出的翻译写入 SyncedLine.translation，避免后续联网重复翻译。
     private func parseSyncedLyrics(_ raw: String?) -> [SyncedLine] {
         guard let raw = raw, !raw.isEmpty else { return [] }
         var lines: [SyncedLine] = []
@@ -420,9 +520,89 @@ final class MusicController: ObservableObject {
             let t = TimeInterval(min * 60 + sec) + ms
             let body = String(text[bodyR]).trimmingCharacters(in: .whitespaces)
             guard !body.isEmpty else { continue }
-            lines.append(SyncedLine(text: body, time: t))
+            let (textPart, translation) = splitBilingualLine(body)
+            // 繁体歌词统一转简体（lrclib 社区上传常含繁体中文）；英文/拉丁部分不受影响。
+            let simplified = toSimplified(textPart)
+            let simplifiedTr = translation.map { toSimplified($0) }
+            lines.append(SyncedLine(text: simplified, time: t, translation: simplifiedTr))
         }
         return lines
+    }
+
+    /// 繁体中文 → 简体中文（CFStringTransform "Hant-Hans"）。
+    /// 仅转换 CJK 字符，英文/拉丁/标点原样保留，可安全用于中英混合歌词与翻译文本。
+    private func toSimplified(_ s: String) -> String {
+        let mutable = NSMutableString(string: s)
+        CFStringTransform(mutable, nil, "Hant-Hans" as CFString, false)
+        return mutable as String
+    }
+
+    /// 检测并拆分一行内「自带双语」的歌词文本。
+    /// 支持的格式：
+    ///   - `原文 / 翻译`、`原文 /翻译`
+    ///   - `原文 (翻译)`、`原文（翻译）`
+    ///   - `原文【翻译】`、`原文 [翻译]`
+    ///   - `原文：翻译`、`原文: 翻译`
+    /// 仅当两侧确实分属不同语言（中 vs 英/其他拉丁）时才拆分，避免把带括号的原文误拆。
+    private func splitBilingualLine(_ line: String) -> (text: String, translation: String?) {
+        let patterns: [(String, String)] = [
+            ("\\s*/\\s*", "/"),          // 斜杠分隔
+            ("[（(]\\s*", "("),          // 半角/全角左括号
+            ("[【\\[]\\s*", "["),        // 全角/半角方括号
+            ("\\s*[:：]\\s*", ":")       // 冒号分隔
+        ]
+        for (sepRegex, sepKind) in patterns {
+            guard let re = try? NSRegularExpression(pattern: sepRegex) else { continue }
+            let ns = NSRange(line.startIndex..., in: line)
+            guard let m = re.firstMatch(in: line, range: ns) else { continue }
+            let sepRange = m.range
+            guard let r = Range(sepRange, in: line) else { continue }
+            // 找到分隔符对应的右闭合符号（括号/方括号需配对到行尾或闭合符）
+            var tailStart = r.upperBound
+            if sepKind == "(" {
+                if let close = line[r.upperBound...].range(of: "）")?.lowerBound ??
+                    line[r.upperBound...].range(of: ")")?.lowerBound {
+                    tailStart = r.upperBound
+                    let translated = String(line[r.upperBound..<close]).trimmingCharacters(in: .whitespaces)
+                    let original = String(line[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    if let result = validateBilingual(original, translated) { return result }
+                }
+                continue
+            } else if sepKind == "[" {
+                if let close = line[r.upperBound...].range(of: "】")?.lowerBound ??
+                    line[r.upperBound...].range(of: "]")?.lowerBound {
+                    let translated = String(line[r.upperBound..<close]).trimmingCharacters(in: .whitespaces)
+                    let original = String(line[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    if let result = validateBilingual(original, translated) { return result }
+                }
+                continue
+            } else {
+                let translated = String(line[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+                let original = String(line[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
+                if let result = validateBilingual(original, translated) { return result }
+            }
+        }
+        return (line, nil)
+    }
+
+    /// 校验两侧是否确为不同语言（避免误拆）。CJK 与拉丁字母混合即视为双语。
+    private func validateBilingual(_ original: String, _ translated: String) -> (text: String, translation: String)? {
+        guard !original.isEmpty, !translated.isEmpty else { return nil }
+        // 两侧不能完全相同
+        guard original != translated else { return nil }
+        let hasCJK: (String) -> Bool = { s in s.contains { 0x4E00...0x9FFF ~= $0.unicodeScalars.first!.value } }
+        let hasLatin: (String) -> Bool = { s in
+            s.rangeOfCharacter(from: CharacterSet.letters.subtracting(CharacterSet(charactersIn: "　-￿"))) != nil
+        }
+        let oCJK = hasCJK(original), oLat = hasLatin(original)
+        let tCJK = hasCJK(translated), tLat = hasLatin(translated)
+        // 一侧中文一侧拉丁（任一组合），判定为双语对照
+        if (oCJK != tCJK) || (oLat != tLat) {
+            if (oCJK || oLat), (tCJK || tLat) {
+                return (original, translated)
+            }
+        }
+        return nil
     }
 
     /// 写入歌词：带时间轴优先写入 syncedLines 供逐行高亮；同时生成纯文本 lyrics 兜底展示。
@@ -439,8 +619,13 @@ final class MusicController: ObservableObject {
                 self.syncedLines = synced
                 // 收缩态/无时间轴兜底展示：用 synced 的文本
                 self.lyrics = synced.map { $0.text }.joined(separator: "\n")
+                // 双语：对带时间轴的歌词逐行补全翻译（自带双语已写入 translation，跳过）
+                self.fetchTranslations(synced: synced, title: title)
             } else {
-                self.lyrics = plain
+                let simplifiedPlain = self.toSimplified(plain)
+                self.lyrics = simplifiedPlain
+                // 双语：无时间轴纯文本歌词，整段翻译补全
+                self.fetchPlainTranslation(plain: simplifiedPlain, title: title)
             }
             // 成功取到歌词：记入成功缓存，停止对该曲的后续重试
             let key = "\(title)-\(artist)"
@@ -449,6 +634,112 @@ final class MusicController: ObservableObject {
                 self.onlineSearchedKeys.insert(key)
             }
         }
+    }
+
+    // MARK: - 双语歌词翻译补全
+    /// 对带时间轴的歌词逐行补全翻译（仅针对没有自带 translation 的行）。
+    /// 自带双语已在 parseSyncedLyrics 拆分，无需联网；联网用 MyMemory 免费 API（无需 key）。
+    /// 译文按行缓存，避免重复请求。整段翻译结果在回调中重建 syncedLines 写回主线程。
+    private func fetchTranslations(synced: [SyncedLine], title: String) {
+        guard bilingualMode != .off else { return }
+        let targets = synced.enumerated().filter {
+            $0.element.translation == nil && !$0.element.text.isEmpty
+        }
+        guard !targets.isEmpty else { return }
+        // 限制单首翻译行数，避免触发翻译 API 限流（MyMemory 未认证约 5000 词/日）
+        let capped = Array(targets.prefix(60))
+        scriptQueue.async { [weak self] in
+            guard let self = self else { return }
+            for (_, line) in capped {
+                let src = line.text
+                if self.translationCache[src] != nil { continue }
+                self.translate(text: src) { [weak self] tr in
+                    guard let self = self else { return }
+                    if let tr = tr, !tr.isEmpty {
+                        self.scriptQueue.async { self.translationCache[src] = tr }
+                    }
+                    self.rebuildSyncedWithTranslations(title: title)
+                }
+            }
+        }
+    }
+
+    /// 根据翻译缓存重建 syncedLines（为每行缺失 translation 的行补全译文）。
+    /// 仅当仍是同一首歌时写回，避免串词。
+    private func rebuildSyncedWithTranslations(title: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            guard self.title == title || title.isEmpty else { return }
+            let rebuilt = self.syncedLines.map { line -> SyncedLine in
+                if line.translation != nil { return line }
+                if let tr = self.translationCache[line.text], !tr.isEmpty {
+                    return SyncedLine(text: line.text, time: line.time, translation: tr)
+                }
+                return line
+            }
+            // 仅在有变化时写回，减少无谓的 @Published 刷新
+            if rebuilt != self.syncedLines { self.syncedLines = rebuilt }
+        }
+    }
+
+    /// 无时间轴纯文本歌词：整段翻译补全（双语模式时展示原文 + 译文）。
+    private func fetchPlainTranslation(plain: String, title: String) {
+        guard bilingualMode != .off, !plain.isEmpty else { return }
+        scriptQueue.async { [weak self] in
+            guard let self = self else { return }
+            if let cached = self.translationCache[plain], !cached.isEmpty {
+                DispatchQueue.main.async { if self.title == title { self.lyricsTranslation = cached } }
+                return
+            }
+            self.translate(text: plain) { [weak self] tr in
+                guard let self = self, let tr = tr, !tr.isEmpty else { return }
+                self.scriptQueue.async { self.translationCache[plain] = tr }
+                DispatchQueue.main.async {
+                    if self.title == title || title.isEmpty { self.lyricsTranslation = tr }
+                }
+            }
+        }
+    }
+
+    /// 切换双语模式后，对当前已载入歌词重新应用（触发翻译或仅依赖 UI 隐藏）。
+    private func reapplyBilingualForCurrentTrack() {
+        guard bilingualMode != .off else { return }
+        if !syncedLines.isEmpty {
+            fetchTranslations(synced: syncedLines, title: title)
+        } else if !lyrics.isEmpty {
+            fetchPlainTranslation(plain: lyrics, title: title)
+        }
+    }
+
+    /// 调用免费翻译 API（MyMemory，无需 key）补全另一语言。
+    /// 目标语言：原文含中文 -> 译为英文；否则（拉丁文/英文）-> 译为中文。
+    /// 返回 nil 表示翻译失败或被限流。
+    private func translate(text: String, completion: @escaping (String?) -> Void) {
+        let q = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        guard !q.isEmpty else { completion(nil); return }
+        let hasCJK = text.contains { 0x4E00...0x9FFF ~= $0.unicodeScalars.first?.value ?? 0 }
+        let target = hasCJK ? "en" : "zh"
+        let source = hasCJK ? "zh" : "en"
+        let urlStr = "https://api.mymemory.translated.net/get?q=\(q)&langpair=\(source)|\(target)"
+        guard let url = URL(string: urlStr) else { completion(nil); return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            guard let data = data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let resp = obj["responseData"] as? [String: Any],
+                  let tr = resp["translatedText"] as? String, !tr.isEmpty else {
+                completion(nil)
+                return
+            }
+            // MyMemory 配额超限时返回提示文本而非译文，过滤掉
+            let lower = tr.lowercased()
+            if lower.contains("quota") || lower.contains("try again later") || lower.contains("please try again") {
+                completion(nil)
+                return
+            }
+            completion(tr)
+        }.resume()
     }
 
     /// 评估搜索结果与当前曲目的匹配度。

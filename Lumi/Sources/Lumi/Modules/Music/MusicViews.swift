@@ -67,9 +67,9 @@ struct MusicBriefContent: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 if music.isPlaying {
-                    if music.showLyrics, !music.lyrics.isEmpty {
+                    if music.showLyrics, !music.currentLineText.isEmpty {
                         MarqueeText(
-                            text: music.lyrics.replacingOccurrences(of: "\n", with: "   •   "),
+                            text: music.currentLineText,
                             font: .system(size: 11, weight: .medium)
                         )
                         .frame(height: 14)
@@ -328,6 +328,32 @@ struct MusicExpandedView: View {
 
                         Spacer()
 
+                        // 双语模式分段切换：原文 / 双语
+                        HStack(spacing: 0) {
+                            ForEach(MusicController.BilingualMode.allCases, id: \.self) { mode in
+                                Button(action: { music.bilingualMode = mode }) {
+                                    let label = mode == .off ? "原" : (mode == .auto ? "双" : "译")
+                                    Text(label)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(
+                                            music.bilingualMode == mode
+                                                ? .white
+                                                : .white.opacity(0.4)
+                                        )
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            music.bilingualMode == mode
+                                                ? Color.white.opacity(0.18)
+                                                : Color.clear
+                                        )
+                                        .cornerRadius(4)
+                                }
+                                .buttonStyle(.plain)
+                                .help(mode.label)
+                            }
+                        }
+
                         Button(action: { music.showLyrics = false }) {
                             Image(systemName: "eye.slash")
                                 .font(.system(size: 11))
@@ -372,12 +398,22 @@ struct MusicExpandedView: View {
                             .frame(maxHeight: 140)
                     } else {
                         ScrollView {
-                            Text(music.lyrics)
-                                .font(.system(size: 13))
-                                .foregroundColor(.white.opacity(0.78))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .lineSpacing(4)
-                                .padding(.vertical, 4)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(music.lyrics)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.white.opacity(0.78))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineSpacing(4)
+                                if music.bilingualMode != .off,
+                                   !music.lyricsTranslation.isEmpty {
+                                    Text(music.lyricsTranslation)
+                                        .font(.system(size: 11.5))
+                                        .foregroundColor(.white.opacity(0.45))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .lineSpacing(3)
+                                }
+                            }
+                            .padding(.vertical, 4)
                         }
                         .frame(maxHeight: 96)
                     }
@@ -486,22 +522,32 @@ struct LyricsSyncView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
-                        Text(line.text)
-                            .font(.system(size: i == activeIndex ? 14 : 13,
-                                          weight: i == activeIndex ? .semibold : .regular))
-                            .foregroundColor(
-                                i == activeIndex ? .white : .white.opacity(0.5)
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .lineSpacing(4)
-                            .id(i)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                // 点击即对齐：该行此刻应在唱，反推 offset
-                                guard line.time >= 0 else { return }
-                                onAlign?(line.time - currentTime)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(line.text)
+                                .font(.system(size: i == activeIndex ? 14 : 13,
+                                              weight: i == activeIndex ? .semibold : .regular))
+                                .foregroundColor(
+                                    i == activeIndex ? .white : .white.opacity(0.5)
+                                )
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineSpacing(4)
+                            if let tr = line.translation, !tr.isEmpty {
+                                Text(tr)
+                                    .font(.system(size: i == activeIndex ? 11.5 : 11,
+                                                  weight: .regular))
+                                    .foregroundColor(.white.opacity(i == activeIndex ? 0.6 : 0.38))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineSpacing(3)
                             }
-                            .animation(.easeInOut(duration: 0.2), value: i == activeIndex)
+                        }
+                        .id(i)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // 点击即对齐：该行此刻应在唱，反推 offset
+                            guard line.time >= 0 else { return }
+                            onAlign?(line.time - currentTime)
+                        }
+                        .animation(.easeInOut(duration: 0.2), value: i == activeIndex)
                     }
                     .padding(.vertical, 4)
                 }
