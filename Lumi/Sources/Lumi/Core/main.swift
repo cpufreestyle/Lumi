@@ -18,6 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 提前加载许可证状态，检测付费功能是否可用
         _ = LicenseManager.shared
 
+        // 请求 Apple Music 授权（媒体与 Apple Music），用于读取官方歌词（带时间轴）。
+        // 必须在主线程调用，首次会弹出系统授权窗。用户拒绝也不影响其他功能。
+        Task { @MainActor in
+            _ = await MusicKitLyricsProvider.ensureAuthorized()
+        }
+
         islandController = IslandWindowController()
         islandController?.show()
 
@@ -42,8 +48,52 @@ final class IslandWindowController: NSObject {
 
     /// 动态岛触发热区：屏幕顶部中央的一条不可见横带
     private let hotZoneHeight: CGFloat = 28
+    /// 热区宽度（内置屏：与刘海/胶囊同宽区域）
+    private let hotZoneWidth: CGFloat = 320
+
+    /// 合盖回退到外接屏时的热区尺寸。
+    /// 外接屏顶部是普通菜单栏（右侧状态栏图标、左侧应用菜单都在此），
+    /// 沿用内置屏的 28×320 会频繁误触发，故显著收窄收薄。
+    private let externalHotZoneHeight: CGFloat = 4
+    private let externalHotZoneWidth: CGFloat = 160
+
     /// 鼠标移出后延迟隐藏，避免抖动
     private let hideDelay: TimeInterval = 0.25
+
+    /// 内置屏（MacBook 自带、带刘海的那块）。动态岛只在这块屏上出现，
+    /// 外接显示器顶部不触发、也不展示面板。
+    /// 判定优先级：safeAreaInsets.top > 0（有刘海）→ 内置显示器类型 → 主屏兜底。
+    private var builtInScreen: NSScreen? {
+        let screens = NSScreen.screens
+        if #available(macOS 12.0, *) {
+            if let notched = screens.first(where: { $0.safeAreaInsets.top > 0 }) {
+                return notched
+            }
+        }
+        if let builtIn = screens.first(where: { screen in
+            guard let number = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? CGDirectDisplayID else { return false }
+            return CGDisplayIsBuiltin(number) != 0
+        }) {
+            return builtIn
+        }
+        // 合盖：内置屏已从 screens 中移除，回退到主屏（外接显示器）
+        return NSScreen.main ?? screens.first
+    }
+
+    /// 给定屏幕是否为真正的内置屏（带刘海 / 内置面板）。
+    /// 合盖时 `builtInScreen` 会回退到外接屏，此时返回 false，
+    /// 用于切换到更保守的热区尺寸，避免和菜单栏抢鼠标。
+    private func isBuiltIn(_ screen: NSScreen) -> Bool {
+        if #available(macOS 12.0, *), screen.safeAreaInsets.top > 0 {
+            return true
+        }
+        guard let number = screen.deviceDescription[
+            NSDeviceDescriptionKey("NSScreenNumber")
+        ] as? CGDirectDisplayID else { return false }
+        return CGDisplayIsBuiltin(number) != 0
+    }
 
     func show() {
         let panel = NSPanel(
@@ -87,6 +137,21 @@ final class IslandWindowController: NSObject {
         NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] ev in
             self?.evaluateHotZone()
             return ev
+        }
+
+        // 屏幕拓扑变化（开合盖、插拔显示器、分辨率变更）：
+        // 目标屏可能已消失或改变，立即按新的 builtInScreen 重新定位，
+        // 否则窗口会滞留在旧屏坐标上直到下次鼠标移动。
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.updateWindowFrame(expanded: AppState.shared.isExpanded)
+            if !AppState.shared.isExpanded {
+                self.evaluateHotZone()
+            }
         }
 
         // 订阅展开/收缩状态，自动调整窗口大小与显隐
@@ -135,12 +200,26 @@ final class IslandWindowController: NSObject {
     private func evaluateHotZone() {
         guard !AppState.shared.isExpanded else { return }
         let mouse = NSEvent.mouseLocation
-        guard let screen = (NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main) else { return }
+        guard let screen = builtInScreen else { return }
+
+        // 仅内置屏参与判定：鼠标在外接显示器上时一律视为离开热区，
+        // 立即收起，避免在其他屏顶部误触发面板。
+        guard screen.frame.contains(mouse) else {
+            wasInZone = false
+            if AppState.shared.islandEnabled { hideIsland() }
+            return
+        }
+
         let f = screen.visibleFrame
-        // 热区：顶部 hotZoneHeight 高度、水平居中 320 宽的范围
-        let zoneX = f.midX - 160
-        let inZone = mouse.y >= f.maxY - hotZoneHeight
-                   && mouse.x >= zoneX && mouse.x <= zoneX + 320
+        // 热区：顶部一条水平居中的横带。
+        // 内置屏用 28×320（贴合刘海区域）；合盖回退到外接屏时改用 4×160，
+        // 因为外接屏顶部是普通菜单栏，大热区会频繁误触发。
+        let builtIn = isBuiltIn(screen)
+        let zoneH = builtIn ? hotZoneHeight : externalHotZoneHeight
+        let zoneW = builtIn ? hotZoneWidth : externalHotZoneWidth
+        let zoneX = f.midX - zoneW / 2
+        let inZone = mouse.y >= f.maxY - zoneH
+                   && mouse.x >= zoneX && mouse.x <= zoneX + zoneW
 
         if !AppState.shared.islandEnabled {
             // 已隐藏：只有"离开热区后重新进入"才会重新显示（触碰动态岛即显示）
@@ -194,17 +273,16 @@ final class IslandWindowController: NSObject {
     }
 
     func updateWindowFrame(expanded: Bool) {
-        // 优先定位到鼠标当前所在屏幕，保证胶囊出现在用户正在使用的屏幕上
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) })
-                  ?? NSScreen.main
-                  ?? NSScreen.screens.first
-        guard let screen = screen else { return }
+        // 固定定位到内置屏（带刘海那块）：动态岛只属于主屏，
+        // 不跟随鼠标跑到外接显示器上。
+        guard let screen = builtInScreen else { return }
         let screenFrame = screen.visibleFrame
 
         let peeking = AppState.shared.isHovering && !expanded
         let w: CGFloat = expanded ? 360 : 320
-        let h: CGFloat = expanded ? 480 : (peeking ? 132 : 48)
+        // 窗口高度精确等于内容高度，避免窗口比圆角内容大而露出多余的透明外框：
+        // 收缩态 CollapsedView 高 42；peek 态 = 预览区 + 胶囊 42 + 底部 6；展开态 480。
+        let h: CGFloat = expanded ? 480 : (peeking ? 132 : 42)
         // 居中于目标屏幕顶部，紧贴菜单栏下方，避开刘海
         let x = screenFrame.midX - w / 2
         let y = screenFrame.maxY - h - 6

@@ -13,6 +13,8 @@ final class MusicController: ObservableObject {
     @Published var duration: TimeInterval = 0
     @Published var artwork: NSImage? = nil
     @Published var lyrics: String = ""
+    /// 带时间轴的歌词（Apple Music 官方歌词）。为空时 UI 退化为纯文本展示。
+    @Published var syncedLines: [SyncedLine] = []
     @Published var showLyrics: Bool = true {
         didSet { UserDefaults.standard.set(showLyrics, forKey: showLyricsKey) }
     }
@@ -22,10 +24,15 @@ final class MusicController: ObservableObject {
 
     private var timer: Timer?
     private var lastTrackKey: String = ""
-    /// 已尝试过在线搜索的曲目集合，避免重复请求（仅在 scriptQueue 上访问）
+    /// 已「成功」取到歌词的曲目集合，避免重复请求（仅在 scriptQueue 上访问）。
+    /// 注意：失败不写入此集合，以便后续周期重试。
     private var onlineSearchedKeys = Set<String>()
+    /// 在线搜索已尝试次数（失败重试用，上限后停止以省流量）。仅在 scriptQueue 上访问。
+    private var onlineAttempts: [String: Int] = [:]
     /// 当前曲目是否已取到歌词（仅在 scriptQueue 上访问，避免跨线程 sync 读 @Published）
     private var hasLyricsFlag = false
+    /// 当前曲目是否已取到封面（仅在 scriptQueue 上访问）。用于封面延迟加载的周期性重试。
+    private var hasArtFlag = false
     /// 当前曲目的名称/艺术家（仅在 scriptQueue 上访问）
     private var queueTitle = ""
     private var queueArtist = ""
@@ -127,12 +134,18 @@ final class MusicController: ObservableObject {
             // 切歌先清空歌词，避免短暂显示上一首的歌词
             if trackChanged {
                 self.lyrics = ""
+                self.syncedLines = []
                 if !hasArt { self.artwork = nil }
             }
         }
 
         // 以下均为阻塞式 AppleScript / 网络调用，继续留在 scriptQueue 上执行
-        if trackChanged, hasArt { fetchArtworkSync() }
+        // 封面：Music 在切歌瞬间可能尚未加载好 artwork（hasArt 暂时为 false），
+        // 因此周期性重试直到取到，避免封面长期缺失/延迟。
+        if trackChanged { hasArtFlag = false }
+        if (trackChanged && hasArt) || (!hasArtFlag && hasArt) {
+            fetchArtworkSync()
+        }
 
         // 歌词：Apple Music 的内嵌歌词在切歌后可能延迟加载，因此周期性重试，
         // 直到取到歌词或曲目再次切换。
@@ -155,6 +168,7 @@ final class MusicController: ObservableObject {
         let data = desc.data
         if !data.isEmpty, let img = NSImage(data: data) {
             DispatchQueue.main.async { [weak self] in self?.artwork = img }
+            hasArtFlag = true
         }
     }
 
@@ -182,12 +196,15 @@ final class MusicController: ObservableObject {
         }
 
         // 内嵌歌词为空：Apple Music 的流媒体订阅歌曲大多如此（lyrics 属性恒为空）。
-        // 回退到在线歌词（lrclib 免费 API，按 歌名+歌手 搜索）。每首歌只搜一次。
+        // 回退到在线歌词（lrclib 免费 API，按 歌名+歌手 搜索）。
+        // lrclib 的 syncedLyrics 是社区从 Apple Music 扒取的逐行时间轴歌词，
+        // 优先拿它做带时间轴的逐行高亮。
         let key = "\(title)-\(artist)"
-        if force, !title.isEmpty, !onlineSearchedKeys.contains(key) {
-            onlineSearchedKeys.insert(key)
-            // 限制缓存容量，避免长期运行无上限增长
-            if onlineSearchedKeys.count > 200 { onlineSearchedKeys.removeAll() }
+        // 成功取过则跳过；失败（含网络不可达）不记入 onlineSearchedKeys，允许后续周期重试，
+        // 但限制每首最多 3 次尝试，避免无谓刷请求。
+        if force, !title.isEmpty, !onlineSearchedKeys.contains(key), (onlineAttempts[key] ?? 0) < 3 {
+            onlineAttempts[key] = (onlineAttempts[key] ?? 0) + 1
+            if onlineAttempts.count > 200 { onlineAttempts.removeAll() }
             fetchLyricsOnline(artist: artist, title: title)
         }
     }
@@ -221,8 +238,60 @@ final class MusicController: ObservableObject {
         let cleaned = cleanTrackTitle(title)
         if !cleaned.isEmpty { tracks.append(cleaned) }
         if !title.isEmpty, !tracks.contains(title) { tracks.append(title) }
-        tryLyricsCandidates(artist: artist, tracks: tracks, index: 0,
+
+        // 候选组合：先带歌手精确搜，再逐步放宽。
+        // 很多歌搜不到是因为 Music 里的歌手字段是 "A & B" / "A feat. B" /
+        // "A, B" 这类组合，与 lrclib 收录的主歌手对不上。
+        var candidates: [(artist: String, track: String)] = []
+        for t in tracks { candidates.append((artist, t)) }
+        let primary = primaryArtist(artist)
+        if primary != artist, !primary.isEmpty {
+            for t in tracks { candidates.append((primary, t)) }
+        }
+        // 最后兜底：只用歌名搜索（不带歌手），靠后续校验过滤错误结果
+        for t in tracks { candidates.append(("", t)) }
+
+        tryLyricsCandidates(candidates: candidates, index: 0,
                             originalTitle: title, originalArtist: artist)
+    }
+
+    /// lyrics.ovh 纯文本兜底源（无时间轴）。当 lrclib 全部候选失败（含网络不可达）时调用。
+    /// 至少能保证显示歌词文本，尽管无法逐行高亮。
+    private func fetchLyricsOvh(artist: String, title: String) {
+        let a = artist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let tt = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        guard !tt.isEmpty else { return }
+        let urlStr = "https://api.lyrics.ovh/v1/\(a)/\(tt)"
+        guard let url = URL(string: urlStr) else { return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, err in
+            guard let self = self else { return }
+            if let err = err {
+                self.lyricLog("lyrics.ovh 网络错误 artist=\(artist) title=\(title) err=\(err.localizedDescription)")
+                return
+            }
+            guard let data = data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let lyr = obj["lyrics"] as? String, !lyr.trimmingCharacters(in: .whitespaces).isEmpty else {
+                self.lyricLog("lyrics.ovh 未返回歌词 artist=\(artist) title=\(title)")
+                return
+            }
+            self.lyricLog("lyrics.ovh 命中纯文本歌词 len=\(lyr.count) title=\(title)")
+            self.setSyncedLyrics(synced: [], plain: lyr, title: title, artist: artist)
+        }.resume()
+    }
+
+    /// 提取主歌手：截断 feat./ft./与/&/, 等协作分隔符
+    private func primaryArtist(_ a: String) -> String {
+        var s = a
+        let seps = [" feat.", " feat ", " ft.", " ft ", " & ", ", ", " x ", " X ", " 、"]
+        for sep in seps {
+            if let r = s.range(of: sep, options: .caseInsensitive) {
+                s = String(s[s.startIndex..<r.lowerBound])
+            }
+        }
+        return s.trimmingCharacters(in: .whitespaces)
     }
 
     /// 移除曲名里的版本/括号后缀，提高在线匹配成功率
@@ -234,66 +303,207 @@ final class MusicController: ObservableObject {
         return s.trimmingCharacters(in: .whitespaces)
     }
 
-    private func tryLyricsCandidates(artist: String, tracks: [String], index: Int,
+    private func tryLyricsCandidates(candidates: [(artist: String, track: String)], index: Int,
                                      originalTitle: String, originalArtist: String) {
-        guard index < tracks.count else {
-            lyricLog("所有候选均未匹配到歌词 artist=\(originalArtist) title=\(originalTitle)")
+        guard index < candidates.count else {
+            // lrclib 所有候选均未命中（含网络不可达）：回退到 lyrics.ovh 纯文本源。
+            lyricLog("lrclib 候选均失败，回退 lyrics.ovh artist=\(originalArtist) title=\(originalTitle)")
+            self.fetchLyricsOvh(artist: originalArtist, title: originalTitle)
             return
         }
-        let t = tracks[index]
-        let a = artist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let tt = t.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let url = URL(string: "https://lrclib.net/api/search?artist_name=\(a)&track_name=\(tt)") else { return }
+        let c = candidates[index]
+        let a = c.artist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let tt = c.track.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        var urlStr = "https://lrclib.net/api/search?track_name=\(tt)"
+        if !a.isEmpty { urlStr += "&artist_name=\(a)" }
+        guard let url = URL(string: urlStr) else { return }
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            let result = self?.parseLyricsFromData(data) ?? ""
-            if !result.isEmpty {
-                DispatchQueue.main.async {
-                    // 写回前确认仍是同一首歌，避免串词
-                    guard let self = self,
-                          self.title == originalTitle,
-                          self.artist == originalArtist,
-                          self.lyrics.isEmpty else { return }
-                    self.lyrics = result
-                    self.scriptQueue.async { self.hasLyricsFlag = true }
-                }
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
+            guard let self = self else { return }
+            if let err = err {
+                self.lyricLog("候选[\(index)]网络错误 artist=\(c.artist) track=\(c.track) err=\(err.localizedDescription)")
+            } else if data == nil || data!.isEmpty {
+                self.lyricLog("候选[\(index)]返回空 data artist=\(c.artist) track=\(c.track)")
+            }
+            // 按与当前曲目的相似度挑选，而不是无脑取第一条，避免同名歌串词
+            let resolved = self.resolveLyrics(data,
+                                              expectTitle: originalTitle,
+                                              expectArtist: originalArtist)
+            if resolved.hasContent {
+                self.lyricLog("候选[\(index)]命中歌词 synced=\(resolved.synced.count) plainLen=\(resolved.plain.count) title=\(originalTitle)")
+                self.setSyncedLyrics(synced: resolved.synced,
+                                     plain: resolved.plain,
+                                     title: originalTitle,
+                                     artist: originalArtist)
             } else {
                 // 当前候选失败，尝试下一个
-                self?.tryLyricsCandidates(artist: artist, tracks: tracks, index: index + 1,
-                                          originalTitle: originalTitle, originalArtist: originalArtist)
+                self.lyricLog("候选[\(index)]未命中，尝试下一个 title=\(originalTitle)")
+                self.tryLyricsCandidates(candidates: candidates, index: index + 1,
+                                         originalTitle: originalTitle, originalArtist: originalArtist)
             }
         }.resume()
     }
 
-    private func parseLyricsFromData(_ data: Data?) -> String {
-        guard let data = data else { return "" }
+    /// 解析歌词结果：优先返回带时间轴的 synced 行（来自 lrclib 的 syncedLyrics，
+    /// 即社区从 Apple Music 扒取的逐行时间轴歌词），否则回退纯文本。
+    private struct ResolvedLyrics {
+        let synced: [SyncedLine]
+        let plain: String
+        var hasContent: Bool { !synced.isEmpty || !plain.isEmpty }
+    }
+
+    private func resolveLyrics(_ data: Data?,
+                               expectTitle: String,
+                               expectArtist: String) -> ResolvedLyrics {
+        guard let data = data else { return ResolvedLyrics(synced: [], plain: "") }
+        var entries: [[String: Any]] = []
         // /api/search 返回数组；个别情况下也可能返回单个字典
         if let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            for d in arr {
-                let r = pickLyrics(d)
-                if !r.isEmpty { return r }
-            }
+            entries = arr
         } else if let d = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let r = pickLyrics(d)
-            if !r.isEmpty { return r }
+            entries = [d]
         }
-        return ""
+        lyricLog("resolveLyrics: entries=\(entries.count) expectTitle=\(expectTitle) expectArtist=\(expectArtist)")
+
+        // /api/search 是模糊搜索，返回结果可能是同名的另一首歌。
+        // 取歌名匹配、且歌手不冲突的最佳条目，而不是第一条有歌词的条目。
+        var best: (score: Int, synced: [SyncedLine], plain: String)?
+        for d in entries {
+            let synced = parseSyncedLyrics(d["syncedLyrics"] as? String)
+            let plain = pickLyrics(d)
+            if synced.isEmpty, plain.isEmpty { continue }
+            let score = matchScore(d, expectTitle: expectTitle, expectArtist: expectArtist)
+            if score < 0 { continue }   // 歌名对不上，直接排除
+            if best == nil || score > best!.score {
+                best = (score, synced, plain)
+            }
+        }
+        guard let b = best else { return ResolvedLyrics(synced: [], plain: "") }
+        // 有带时间轴的歌词优先使用；否则用纯文本
+        if !b.synced.isEmpty {
+            return ResolvedLyrics(synced: b.synced, plain: b.plain)
+        }
+        return ResolvedLyrics(synced: [], plain: b.plain)
+    }
+
+    /// 把 LRC 文本（含 [mm:ss.xx] 时间戳）解析为带时间轴的 SyncedLine 数组。
+    private func parseSyncedLyrics(_ raw: String?) -> [SyncedLine] {
+        guard let raw = raw, !raw.isEmpty else { return [] }
+        var lines: [SyncedLine] = []
+        let regex = try? NSRegularExpression(pattern: #"^(\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\])+(.*)$"#)
+        for line in raw.components(separatedBy: .newlines) {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            guard let regex = regex,
+                  let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let minR = Range(m.range(at: 2), in: text),
+                  let secR = Range(m.range(at: 3), in: text),
+                  let bodyR = Range(m.range(at: 5), in: text) else { continue }
+            guard let min = Int(text[minR]), let sec = Int(text[secR]) else { continue }
+            let msRange = m.range(at: 4)
+            let msStr = (Range(msRange, in: text).map { String(text[$0]) }) ?? ""
+            // lrclib 的 syncedLyrics 时间戳 [mm:ss.xx] 中 .xx 可能是厘秒（2 位）或毫秒（3 位），
+            // 按小数位数自适应换算，避免时间整体偏移导致逐行高亮错位。
+            let divisor = pow(10.0, Double(msStr.count))
+            let ms = (Double(msStr) ?? 0) / (divisor > 1 ? divisor : 1000)
+            let t = TimeInterval(min * 60 + sec) + ms
+            let body = String(text[bodyR]).trimmingCharacters(in: .whitespaces)
+            guard !body.isEmpty else { continue }
+            lines.append(SyncedLine(text: body, time: t))
+        }
+        return lines
+    }
+
+    /// 写入歌词：带时间轴优先写入 syncedLines 供逐行高亮；同时生成纯文本 lyrics 兜底展示。
+    private func setSyncedLyrics(synced: [SyncedLine], plain: String,
+                                 title: String, artist: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            // 写回前确认仍是同一首歌，避免串词
+            guard self.title == title || title.isEmpty,
+                  self.lyrics.isEmpty else { return }
+            if !synced.isEmpty {
+                self.syncedLines = synced
+                // 收缩态/无时间轴兜底展示：用 synced 的文本
+                self.lyrics = synced.map { $0.text }.joined(separator: "\n")
+            } else {
+                self.lyrics = plain
+            }
+            // 成功取到歌词：记入成功缓存，停止对该曲的后续重试
+            let key = "\(title)-\(artist)"
+            self.scriptQueue.async {
+                self.hasLyricsFlag = true
+                self.onlineSearchedKeys.insert(key)
+            }
+        }
+    }
+
+    /// 评估搜索结果与当前曲目的匹配度。
+    /// 返回 -1 表示歌名不匹配（应排除）；分值越高越可信。
+    private func matchScore(_ d: [String: Any], expectTitle: String, expectArtist: String) -> Int {
+        let rTitle = norm((d["trackName"] as? String) ?? "")
+        let rArtist = norm((d["artistName"] as? String) ?? "")
+        let eTitle = norm(expectTitle)
+        let eArtist = norm(expectArtist)
+        guard !rTitle.isEmpty, !eTitle.isEmpty else { return -1 }
+
+        // 歌名：必须相等或互相包含，否则判定为不同的歌
+        var score: Int
+        if rTitle == eTitle {
+            score = 100
+        } else if rTitle.contains(eTitle) || eTitle.contains(rTitle) {
+            score = 60
+        } else {
+            return -1
+        }
+
+        // 歌手：匹配加分；对不上不直接否决（组合歌手/译名差异很常见）
+        if !eArtist.isEmpty, !rArtist.isEmpty {
+            if rArtist == eArtist {
+                score += 50
+            } else if rArtist.contains(eArtist) || eArtist.contains(rArtist) {
+                score += 30
+            }
+        }
+        // 有逐行时间戳的版本更优
+        if let s = d["syncedLyrics"] as? String, !s.isEmpty { score += 5 }
+        return score
+    }
+
+    /// 归一化：小写、去掉空白与标点，便于宽松比较
+    private func norm(_ s: String) -> String {
+        s.lowercased()
+            .replacingOccurrences(of: #"[\s\-_'’,.!?()\[\]（）【】]"#,
+                                  with: "", options: .regularExpression)
     }
 
     private func pickLyrics(_ d: [String: Any]) -> String {
         let synced = (d["syncedLyrics"] as? String) ?? ""
         let plain = (d["plainLyrics"] as? String) ?? ""
-        // 优先纯文本歌词（更干净），无则退用带时间戳版本
-        return (!plain.isEmpty ? plain : synced).trimmingCharacters(in: .whitespacesAndNewlines)
+        // 优先纯文本歌词（更干净）；只有带时间戳版本时，先剥离 [mm:ss.xx] 前缀，
+        // 否则界面会直接把时间戳当歌词文本显示出来。
+        if !plain.isEmpty {
+            return plain.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return stripTimestamps(synced)
     }
 
-    /// 调试日志：仅 DEBUG 构建输出到控制台。
-    /// （原实现每次调用都向 ~/lumi_lyrics.log 追加写盘，属于生产环境的无谓 IO。）
+    /// 去掉 LRC 行首时间戳，并丢弃空行
+    private func stripTimestamps(_ s: String) -> String {
+        guard !s.isEmpty else { return "" }
+        let lines = s.components(separatedBy: .newlines).map { line -> String in
+            line.replacingOccurrences(of: #"^(\[\d{1,2}:\d{2}(\.\d{1,3})?\])+"#,
+                                      with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return lines.filter { !$0.isEmpty }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 调试日志：输出到系统日志（unified log，可用 `log show` 抓取）。
     private func lyricLog(_ msg: String) {
-        #if DEBUG
-        print("[Lumi/Music] \(msg)")
-        #endif
+        NSLog("[Lumi/Music] \(msg)")
     }
 
     // MARK: - 控制
@@ -316,6 +526,7 @@ final class MusicController: ObservableObject {
             self.runScript("tell application \"Music\"\n\(command)\nend tell")
             self.lastTrackKey = ""
             self.hasLyricsFlag = false
+            self.hasArtFlag = false
             self.fetchInfoSync()
         }
     }

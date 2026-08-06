@@ -26,8 +26,10 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Lumi需要访问系统音乐来显示当前播放信息和控制播放。</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Lumi需要访问系统音乐来显示当前播放信息和控制播放。</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Lumi需要访问Apple Music以读取当前曲目的官方歌词（带时间轴）。</string>
     <key>NSCalendarsUsageDescription</key>
     <string>Lumi需要访问日历以显示您的日程安排。</string>
     <key>NSBluetoothAlwaysUsageDescription</key>

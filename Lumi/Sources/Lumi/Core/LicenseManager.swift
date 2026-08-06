@@ -37,6 +37,7 @@ enum LicenseStatus: Equatable {
     case trial(daysRemaining: Int)
     case licensed(expiryDate: Date?)
     case lifetime
+    case revoked(reason: String?)
 }
 
 // MARK: - 激活错误
@@ -46,6 +47,8 @@ enum LicenseError: Error {
     case invalid
     /// 旧版 CRC 激活码（LUMI-XXXX-XXXX-XXXX-XXXX），授权体系升级后已失效
     case legacyKey
+    /// 激活码绑定的设备与当前设备不一致（LUMI2- 的 dev 字段不匹配）
+    case deviceMismatch
 }
 
 // MARK: - 授权管理器
@@ -68,6 +71,12 @@ final class LicenseManager: ObservableObject {
         try? FileManager.default.createDirectory(at: lumiDir, withIntermediateDirectories: true)
         licenseFileURL = lumiDir.appendingPathComponent("license.dat")
         loadLicense()
+        loadRevocationCache()
+        refreshRevocations()
+        // Q3: 吊销清单拉取策略 —— 每日定时拉取一次（配合启动拉取 + 面板「重新检查」）
+        Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+            self?.refreshRevocations()
+        }
     }
 
     // MARK: - 公开方法
@@ -79,7 +88,7 @@ final class LicenseManager: ObservableObject {
             return true
         case .trial:
             return unlockedFeatures.contains(feature)
-        case .unlicensed:
+        case .unlicensed, .revoked:
             return false
         }
     }
@@ -108,11 +117,27 @@ final class LicenseManager: ObservableObject {
                 self.isActivating = false
                 switch result {
                 case .success(let expiry):
+                    let nonce = self.nonceOfKey(key)
+                    // 本地激活埋点（PRD 5.4）
+                    let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if normalized.hasPrefix("LUMI2-") {
+                        Telemetry.shared.record(.activateLumi2)
+                    } else if normalized.hasPrefix("LUMI1-") {
+                        let parts = normalized.components(separatedBy: "-")
+                        if let payload = Data(base64Encoded: parts[1]),
+                           let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                           json["life"] as? Bool == true {
+                            Telemetry.shared.record(.activateLifetime)
+                        } else {
+                            Telemetry.shared.record(.activateLumi1)
+                        }
+                    }
                     let licenseData: [String: Any] = [
                         "type": expiry == nil ? "lifetime" : "licensed",
                         "activatedAt": Date().timeIntervalSince1970,
                         "expiry": expiry?.timeIntervalSince1970 as Any,
-                        "keyHash": self.sha256(key)
+                        "keyHash": self.sha256(key),
+                        "nonce": nonce as Any
                     ]
                     self.saveLicenseData(licenseData)
                     self.loadLicense()
@@ -133,6 +158,8 @@ final class LicenseManager: ObservableObject {
             unlockedFeatures = []
             return
         }
+
+        let storedNonce = json["nonce"] as? String
 
         switch type {
         case "trial":
@@ -175,6 +202,13 @@ final class LicenseManager: ObservableObject {
             status = .unlicensed
             unlockedFeatures = []
         }
+
+        // 吊销检查：联网拉取的签名清单命中本机 nonce → 置为已吊销。
+        // 离线期间沿用上一次缓存（存在最多到下次联网的吊销延迟，属已知取舍）。
+        if let nonce = storedNonce, cachedRevokedNonces.contains(nonce) {
+            status = .revoked(reason: nil)
+            unlockedFeatures = []
+        }
     }
 
     private func saveLicenseData(_ data: [String: Any]) {
@@ -214,7 +248,8 @@ final class LicenseManager: ObservableObject {
         }
 
         let parts = normalized.components(separatedBy: "-")
-        guard parts.count == 3, parts[0].uppercased() == "LUMI1" else {
+        let prefix = parts[0].uppercased()
+        guard parts.count == 3, ["LUMI1", "LUMI2"].contains(prefix) else {
             return .failure(.invalidFormat)
         }
         guard let payload = Data(base64Encoded: parts[1]),
@@ -231,6 +266,13 @@ final class LicenseManager: ObservableObject {
         guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
             return .failure(.invalid)
         }
+        // 设备绑定（仅 LUMI2-）：payload 中的 dev 必须与本机 DeviceId 一致。
+        // 此检查在验签之后，攻击者无法篡改 dev（改了签名即失效）。
+        if prefix == "LUMI2", let boundDev = json["dev"] as? String {
+            guard boundDev == DeviceId.current else {
+                return .failure(.deviceMismatch)
+            }
+        }
         if json["life"] as? Bool == true {
             return .success(nil)   // 永久许可
         }
@@ -246,6 +288,86 @@ final class LicenseManager: ObservableObject {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    // MARK: - 吊销清单（签名清单 + 联网拉取）
+    //
+    // 纯离线 Ed25519 无法实时吊销。采用「服务端用私钥签名的吊销清单」：
+    // 客户端联网时拉取并验签，命中本机 nonce 即失效。离线期间沿用上一次
+    // 缓存（存在最多到下次联网的吊销延迟，这是该架构的已知取舍）。
+    //
+    // 清单格式（单行）：LUMIRL-<payloadBase64>-<signatureBase64>
+    //   payload(JSON): {"v":1,"ts":<签发Unix>,"entries":[{"n":<nonce>,"ts":<吊销Unix>,"reason":<String>}]}
+
+    private let revokedCacheKey = "lumi_revoked_list_cache"
+    private var cachedRevokedNonces: Set<String> = []
+
+    /// 联网拉取并验签吊销清单；成功则更新缓存并重新评估授权状态。
+    /// 拉取/验签失败时保留上次缓存，绝不降级为「已吊销」。
+    func refreshRevocations(completion: ((Bool) -> Void)? = nil) {
+        let endpoint: URL
+        if let override = UserDefaults.standard.string(forKey: "lumi_revocation_endpoint"),
+           let u = URL(string: override.trimmingCharacters(in: .whitespacesAndNewlines)),
+           u.scheme != nil {
+            endpoint = u
+        } else {
+            endpoint = URL(string: "https://api.lumi.app/v1/revocations")!
+        }
+
+        var request = URLRequest(url: endpoint, timeoutInterval: 15)
+        request.httpMethod = "GET"
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            guard let self = self,
+                  error == nil,
+                  let data = data,
+                  let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty,
+                  let (nonces, _) = self.parseRevocationList(raw) else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+            UserDefaults.standard.set(raw, forKey: self.revokedCacheKey)
+            DispatchQueue.main.async {
+                self.cachedRevokedNonces = nonces
+                self.loadLicense()
+                completion?(true)
+            }
+        }.resume()
+    }
+
+    /// 解析并验签吊销清单，返回被吊销的 nonce 集合
+    private func parseRevocationList(_ raw: String) -> (Set<String>, TimeInterval)? {
+        let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "-")
+        guard parts.count == 3, parts[0].uppercased() == "LUMIRL",
+              let payload = Data(base64Encoded: parts[1]),
+              let signature = Data(base64Encoded: parts[2]),
+              let pub = Self.licensePublicKey,
+              pub.isValidSignature(signature, for: payload) else { return nil }
+        guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let entries = json["entries"] as? [[String: Any]] else { return nil }
+        let nonces = Set(entries.compactMap { $0["n"] as? String })
+        let ts = json["ts"] as? TimeInterval ?? 0
+        return (nonces, ts)
+    }
+
+    /// 从本地缓存恢复吊销清单（启动时使用，离线也可用上一次结果）
+    private func loadRevocationCache() {
+        guard let raw = UserDefaults.standard.string(forKey: revokedCacheKey),
+              let (nonces, _) = parseRevocationList(raw) else {
+            cachedRevokedNonces = []
+            return
+        }
+        cachedRevokedNonces = nonces
+    }
+
+    /// 从激活码提取唯一标识 nonce（用于吊销匹配）
+    private func nonceOfKey(_ key: String) -> String? {
+        let parts = key.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "-")
+        guard parts.count == 3, let payload = Data(base64Encoded: parts[1]),
+              let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            return nil
+        }
+        return json["n"] as? String
+    }
+
     /// 将激活错误转换为用户友好提示
     private static func errorMessage(for error: LicenseError) -> String {
         switch error {
@@ -257,6 +379,8 @@ final class LicenseManager: ObservableObject {
             return "激活码无效，无法解析授权信息。"
         case .legacyKey:
             return "您输入的是旧版激活码，授权体系已升级，旧码已失效。请凭原购买凭证联系 support@lumi.app 免费换取新的 LUMI1- 激活码（权益不变）。"
+        case .deviceMismatch:
+            return "该激活码已绑定其他设备。若您换机或重装，请使用「旧码换发」重新获取绑定本机的新激活码（权益不变）。"
         }
     }
 }

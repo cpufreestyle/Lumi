@@ -14,6 +14,11 @@ struct ContentView: View {
                 CollapsedView()
             }
         }
+        // 内容严格填满窗口，不留额外边距，避免圆角外露出多余的透明矩形外框
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 命中区域裁剪为圆角形状：透明的四个直角不再响应 hover / 点击。
+        // 只改命中区域、不用 clipShape，以免把内容自带的 .shadow 一并裁掉。
+        .contentShape(RoundedRectangle(cornerRadius: state.isExpanded ? 22 : 21))
         .background(WindowAccessor())
         .onHover { inside in
             AppState.shared.isHovering = inside
@@ -253,7 +258,15 @@ struct ExpandedView: View {
                     state.showLicensePanel = false
                 }
 
-            LicensePanelView()
+            // 内容超高时内部滚动，圆角背景始终贴合可视区域，
+            // 既不会被容器裁掉，也不会撑出多余外框
+            ScrollView(.vertical, showsIndicators: false) {
+                LicensePanelView()
+            }
+                // fixedSize 让 ScrollView 按内容真实高度收缩（内容少时不撑出空白外框），
+                // frame 再把它的高度上限压在容器内（内容多时转为滚动）
+                .fixedSize(horizontal: true, vertical: true)
+                .frame(maxHeight: 456)
                 .background(
                     RoundedRectangle(cornerRadius: 16)
                         .fill(.ultraThinMaterial)
@@ -262,7 +275,9 @@ struct ExpandedView: View {
                                 .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
                         )
                 )
+                .clipShape(RoundedRectangle(cornerRadius: 16))
                 .shadow(color: .black.opacity(0.5), radius: 30, y: 10)
+                .padding(.vertical, 12)
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
         }
     }
@@ -303,64 +318,76 @@ struct TabBarView: View {
     @ObservedObject private var license = LicenseManager.shared
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppModule.allCases) { mod in
-                Button(action: {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
-                        state.activeModule = mod
+        // 外层 VStack 明确纵向排列：标签行在上、分隔线在下。
+        // 此前两者在 body 中并列，被包成无方向约束的 TupleView，
+        // 排列方式取决于父视图，容易导致分隔线错位。
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(AppModule.allCases) { mod in
+                    Button(action: {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                            state.activeModule = mod
+                        }
+                        // 点击付费模块时弹出许可证面板
+                        if mod.isPremium,
+                           let feature = mod.premiumFeature,
+                           !license.isUnlocked(feature) {
+                            state.showLicensePanel = true
+                        }
+                    }) {
+                        VStack(spacing: 3) {
+                            ZStack {
+                                Image(systemName: mod.icon)
+                                    .font(.system(size: 15))
+                                if mod.isPremium, let feature = mod.premiumFeature, !license.isUnlocked(feature) {
+                                    Image(systemName: "lock.fill")
+                                        .font(.system(size: 7))
+                                        .foregroundColor(.orange)
+                                        .offset(x: 7, y: -6)
+                                }
+                            }
+                            Text(mod.shortName)
+                                .font(.system(size: 9, weight: .medium))
+                        }
+                        .foregroundColor(state.activeModule == mod ? .pink : .white.opacity(0.5))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
                     }
-                    // 点击付费模块时弹出许可证面板
-                    if mod.isPremium,
-                       let feature = mod.premiumFeature,
-                       !license.isUnlocked(feature) {
-                        state.showLicensePanel = true
+                    .buttonStyle(.plain)
+                }
+            }
+            // 为右上角悬浮的隐藏按钮预留宽度，避免最后一个模块（下载）与其重叠
+            .padding(.trailing, 34)
+            .padding(.leading, 12)
+            .padding(.top, 4)
+            .overlay(alignment: .topTrailing) {
+                // 隐藏整个界面（鼠标移到顶部可重新出现入口）。
+                // 用 overlay 而非放进 HStack：模块按钮是 maxWidth:.infinity 等分的，
+                // 同行放置会互相挤压导致重叠。
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        AppState.shared.islandEnabled = false
                     }
                 }) {
-                    VStack(spacing: 3) {
-                        ZStack {
-                            Image(systemName: mod.icon)
-                                .font(.system(size: 15))
-                            if mod.isPremium, let feature = mod.premiumFeature, !license.isUnlocked(feature) {
-                                Image(systemName: "lock.fill")
-                                    .font(.system(size: 7))
-                                    .foregroundColor(.orange)
-                                    .offset(x: 7, y: -6)
-                            }
-                        }
-                        Text(mod.shortName)
-                            .font(.system(size: 9, weight: .medium))
-                    }
-                    .foregroundColor(state.activeModule == mod ? .pink : .white.opacity(0.5))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(7)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
                 }
                 .buttonStyle(.plain)
+                .help("隐藏界面（鼠标移到顶部可重新出现入口）")
+                .padding(.trailing, 8)
+                // 下移与模块图标视觉居中对齐
+                .padding(.top, 14)
             }
 
-            // 右侧：隐藏整个界面（鼠标移到顶部可重新出现入口）
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    AppState.shared.islandEnabled = false
-                }
-            }) {
-                Image(systemName: "eye.slash")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(7)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-            }
-            .buttonStyle(.plain)
-            .help("隐藏界面（鼠标移到顶部可重新出现入口）")
-            .padding(.trailing, 4)
+            // 底部分隔线
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(height: 0.5)
+                .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-
-        // 底部分隔线
-        Rectangle()
-            .fill(Color.white.opacity(0.1))
-            .frame(height: 0.5)
-            .padding(.horizontal, 16)
     }
 }
 
@@ -483,6 +510,16 @@ struct LicensePanelView: View {
     @State private var activationKey: String = ""
     @FocusState private var isKeyFocused: Bool
 
+    // 旧版激活码换发（自助迁移）
+    @State private var showRedeem = false
+    @State private var oldKeyInput: String = ""
+    @State private var orderInput: String = ""
+    @State private var endpointOverride: String = ""
+    @State private var redeemLoading = false
+    @State private var redeemError: String?
+    @State private var redeemMessage: String?
+    @State private var showDiagnostics = false
+
     var body: some View {
         VStack(spacing: 0) {
             // 标题
@@ -501,6 +538,7 @@ struct LicensePanelView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 10)
+            .onAppear { license.refreshRevocations() }
 
             // 当前状态
             licenseStatusCard
@@ -607,6 +645,85 @@ struct LicensePanelView: View {
                 .disabled(activationKey.count < 19 || license.isActivating)
             }
 
+            // 旧版激活码自助换发入口
+            VStack(spacing: 8) {
+                Button(action: { withAnimation { showRedeem.toggle() } }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11))
+                        Text(showRedeem ? "收起换发" : "我有旧版激活码？免费换发新码")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(.pink.opacity(0.9))
+                }
+                .buttonStyle(.plain)
+
+                if showRedeem {
+                    VStack(spacing: 8) {
+                        TextField("旧版激活码 LUMI-XXXX-XXXX-XXXX-XXXX", text: $oldKeyInput)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color.white.opacity(0.08))
+                            .cornerRadius(8)
+                            .onChange(of: oldKeyInput) { v in
+                                let up = v.uppercased(); if up != v { oldKeyInput = up }
+                            }
+                        TextField("购买订单号（凭证）", text: $orderInput)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color.white.opacity(0.08))
+                            .cornerRadius(8)
+                        TextField("后端地址（可选，留空用默认）", text: $endpointOverride)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.7))
+                            .padding(8)
+                            .background(Color.white.opacity(0.06))
+                            .cornerRadius(8)
+
+                        if let msg = redeemMessage {
+                            Text(msg).font(.system(size: 10)).foregroundColor(.green.opacity(0.9))
+                                .padding(.horizontal, 4)
+                        }
+                        if let err = redeemError {
+                            Text(err).font(.system(size: 10)).foregroundColor(.red.opacity(0.85))
+                                .padding(.horizontal, 4)
+                        }
+
+                        Button(action: performRedeem) {
+                            HStack(spacing: 6) {
+                                if redeemLoading {
+                                    ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                                }
+                                Text(redeemLoading ? "换发中…" : "换发并激活本机")
+                            }
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(
+                                canRedeem
+                                ? AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing))
+                                : AnyShapeStyle(Color.white.opacity(0.1))
+                            )
+                            .cornerRadius(9)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canRedeem || redeemLoading)
+
+                        Text("换发后新码将绑定本机设备，不可转借他人。")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.35))
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+            .padding(.top, 8)
+
             // 试用按钮
             if case .unlicensed = license.status {
                 Button(action: { license.startTrial() }) {
@@ -622,9 +739,96 @@ struct LicensePanelView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
+
+            // 本地诊断数据（可观测性，仅本机 UserDefaults，不上报）
+            DisclosureGroup("本地诊断数据", isExpanded: $showDiagnostics) {
+                let snap = Telemetry.shared.snapshot()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("激活次数：\(snap.activations)（其中设备绑定 \(snap.deviceBoundActivations)）")
+                        .font(.system(size: 10))
+                    Text("换码尝试：\(snap.redeemAttempts)　成功：\(snap.redeemSuccesses)　失败：\(snap.redeemFailures)")
+                        .font(.system(size: 10))
+                    if !snap.failureBreakdown.isEmpty {
+                        Text("失败原因分布：")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.4))
+                        ForEach(snap.failureBreakdown.indices, id: \.self) { i in
+                            let item = snap.failureBreakdown[i]
+                            Text("  • \(item.reason)：\(item.count)")
+                                .font(.system(size: 10))
+                        }
+                    }
+                }
+                .foregroundColor(.white.opacity(0.5))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
         }
         .padding(.bottom, 14)
-        .frame(width: 360)
+        // 比展开面板(360)窄一圈，配合外层垂直 padding 使浮层四周留白均匀，
+        // 不会顶到容器边缘产生"多余外框"观感
+        .frame(width: 336)
+    }
+
+    private var canRedeem: Bool {
+        !oldKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !orderInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func performRedeem() {
+        let oldKey = oldKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let order = orderInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldKey.isEmpty, !order.isEmpty else {
+            redeemError = "请填写旧激活码与订单号"
+            return
+        }
+        redeemLoading = true
+        redeemError = nil
+        redeemMessage = nil
+        Telemetry.shared.record(.redeemAttempt)
+
+        let resolved: URL
+        let override = endpointOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !override.isEmpty, let u = URL(string: override), u.scheme != nil {
+            resolved = u
+        } else {
+            resolved = RedemptionService().endpoint
+        }
+
+        // 调用后端换发：私钥仅在服务端，本机只收到已签名的 LUMI2- 新码
+        RedemptionService(endpoint: resolved).redeem(oldKey: oldKey, order: order, deviceId: DeviceId.current) { result in
+            DispatchQueue.main.async {
+                self.redeemLoading = false
+                switch result {
+                case .success(let newCode):
+                    Telemetry.shared.record(.redeemSuccess)
+                    // 新码已绑定本机 DeviceId，直接激活
+                    self.license.activate(with: newCode)
+                    self.redeemMessage = "✅ 换发成功，已自动激活本机。"
+                    self.oldKeyInput = ""
+                    self.orderInput = ""
+                case .failure(let err):
+                    Telemetry.shared.recordRedeemFailure(reason: Self.redeemFailureReason(err))
+                    self.redeemError = RedemptionService.errorMessage(err)
+                }
+            }
+        }
+    }
+
+    private static func redeemFailureReason(_ err: RedemptionService.RedemptionError) -> String {
+        switch err {
+        case .network:
+            return "网络错误"
+        case .invalidResponse:
+            return "响应异常"
+        case .server(let code, _):
+            switch code {
+            case 400: return "业务拒绝"
+            default:  return "服务端错误(\(code))"
+            }
+        }
     }
 
     @ViewBuilder
@@ -644,6 +848,17 @@ struct LicensePanelView: View {
             }
 
             Spacer()
+
+            Button(action: { license.refreshRevocations() }) {
+                Text("重新检查")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.6))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
         }
         .padding(12)
         .background(Color.white.opacity(0.04))
@@ -656,15 +871,25 @@ struct LicensePanelView: View {
         case .trial:      return "clock.badge.checkmark"
         case .licensed:   return "checkmark.shield"
         case .lifetime:   return "crown.fill"
+        case .revoked:    return "xmark.shield.fill"
         }
+    }
+
+    private var isExpiringSoon: Bool {
+        if case .licensed(let expiry) = license.status, let date = expiry {
+            let remaining = date.timeIntervalSinceNow
+            return remaining > 0 && remaining < 7 * 24 * 3600
+        }
+        return false
     }
 
     var statusColor: Color {
         switch license.status {
         case .unlicensed: return .orange
         case .trial:      return .blue
-        case .licensed:   return .green
+        case .licensed:   return isExpiringSoon ? .orange : .green
         case .lifetime:   return .yellow
+        case .revoked:    return .red
         }
     }
 
@@ -674,6 +899,7 @@ struct LicensePanelView: View {
         case .trial(let days):               return "试用中"
         case .licensed(let expiry):          return "已激活"
         case .lifetime:                      return "永久许可"
+        case .revoked:                       return "已吊销"
         }
     }
 
@@ -687,11 +913,14 @@ struct LicensePanelView: View {
             if let date = expiry {
                 let f = DateFormatter()
                 f.dateFormat = "yyyy-MM-dd"
-                return "有效期至 \(f.string(from: date))"
+                let base = "有效期至 \(f.string(from: date))"
+                return isExpiringSoon ? base + "（即将到期，请尽快续费）" : base
             }
             return "已激活"
         case .lifetime:
             return "永久有效，畅享全部功能"
+        case .revoked:
+            return "激活码已被吊销，请重新激活或联系 support@lumi.app"
         }
     }
 }

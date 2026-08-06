@@ -282,10 +282,14 @@ struct MusicExpandedView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     if music.lyrics.isEmpty {
-                        Text("当前歌曲暂无内嵌歌词")
+                        Text("当前歌曲暂无歌词")
                             .font(.system(size: 12))
                             .foregroundColor(.white.opacity(0.4))
                             .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if !music.syncedLines.isEmpty {
+                        // Apple Music 官方歌词（带时间轴）：逐行高亮当前播放行。
+                        LyricsSyncView(lines: music.syncedLines, currentTime: music.currentTime)
+                            .frame(maxHeight: 140)
                     } else {
                         ScrollView {
                             Text(music.lyrics)
@@ -372,5 +376,54 @@ struct MiniVisualizer: View {
             }
         }
         .onDisappear { timer?.invalidate() }
+    }
+}
+
+// MARK: - Apple Music 逐行高亮歌词
+/// 根据当前播放进度高亮对应歌词行，并自动滚动到该行。
+struct LyricsSyncView: View {
+    let lines: [SyncedLine]
+    let currentTime: TimeInterval
+
+    /// 当前应高亮的行索引：最后一个 time <= currentTime 的行（time<0 视为无时间轴，不高亮）。
+    private var activeIndex: Int? {
+        var idx: Int?
+        for (i, line) in lines.enumerated() {
+            guard line.time >= 0 else { continue }
+            if line.time <= currentTime { idx = i }
+            else { break }
+        }
+        return idx
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
+                        Text(line.text)
+                            .font(.system(size: i == activeIndex ? 14 : 13,
+                                          weight: i == activeIndex ? .semibold : .regular))
+                            .foregroundColor(
+                                i == activeIndex ? .white : .white.opacity(0.5)
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineSpacing(4)
+                            .id(i)
+                            .animation(.easeInOut(duration: 0.2), value: i == activeIndex)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .padding(.horizontal, 4)
+            }
+            .frame(maxHeight: 140)
+            // 当前行变化时平滑滚动到它（居中），仅在播放且确有时间轴时进行
+            .onChange(of: activeIndex) { newIndex in
+                guard let newIndex = newIndex else { return }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo(newIndex, anchor: .center)
+                }
+            }
+        }
     }
 }

@@ -7,6 +7,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const { execFile } = require('child_process');
 
 // ============ 加载配置 ============
 function loadConfig() {
@@ -211,6 +212,60 @@ PORT=${config.port}
     res.json({ success: true, message: '凭据已保存并验证成功', token });
   } catch (err) {
     res.json({ success: true, warning: `凭据已保存但令牌生成失败: ${err.message}` });
+  }
+});
+
+// ============ 旧版激活码换发（包装 license-tool，私钥仅留 Swift 工具侧） ============
+// 请求体：{ oldKey, order, device }
+// 成功：纯文本返回新激活码 LUMI2-...
+app.post('/api/redeem', (req, res) => {
+  const { oldKey, order, device, nonce } = req.body || {};
+  if (!oldKey || !order || !device) {
+    return res.status(400).type('text/plain').send('oldKey、order、device 均为必填');
+  }
+
+  // 读取本地 Ed25519 私钥（与 license-tool 同源；生产环境应置于独立后端服务）
+  const keyPath = path.join(__dirname, 'Lumi', 'secrets', 'license_private_key.b64');
+  let keyB64 = '';
+  try { keyB64 = fs.readFileSync(keyPath, 'utf-8').trim(); } catch (e) { /* ignore */ }
+  if (!keyB64) {
+    return res.status(500).type('text/plain').send('服务端未配置私钥，无法签发新码');
+  }
+
+  const env = { ...process.env, LUMI_LICENSE_PRIVATE_KEY: keyB64 };
+  if (process.env.LUMI_VALID_ORDERS) env.LUMI_VALID_ORDERS = process.env.LUMI_VALID_ORDERS;
+  if (process.env.LUMI_DEVICE_LIMIT) env.LUMI_DEVICE_LIMIT = process.env.LUMI_DEVICE_LIMIT;
+
+  const args = ['run', 'license-tool', 'redeem',
+    '--old-key', String(oldKey), '--order', String(order),
+    '--device', String(device), '--lifetime'];
+  // 透传客户端防重放 nonce（与 license-tool 的 redeem_state 防重放配合）
+  if (nonce) args.push('--nonce', String(nonce));
+  execFile('swift', args, { cwd: path.join(__dirname, 'Lumi'), env, timeout: 180000 },
+    (err, stdout, stderr) => {
+      if (err) {
+        return res.status(400).type('text/plain').send((stderr || err.message || '换发失败').trim());
+      }
+      const code = stdout.trim();
+      if (!code.startsWith('LUMI2-')) {
+        return res.status(400).type('text/plain').send((stderr || '换发失败').trim());
+      }
+      res.type('text/plain').send(code);
+    });
+});
+
+// ============ 吊销清单（已用私钥离线签名，直接提供静态文件） ============
+// 返回 LUMIRL-<payload>-<sig> 单行文本；客户端验签后用于吊销匹配。
+app.get('/api/revocations', (req, res) => {
+  const p = path.join(__dirname, 'Lumi', 'secrets', 'revocations.lumi');
+  if (!fs.existsSync(p)) {
+    return res.status(404).type('text/plain').send('no revocation list published');
+  }
+  try {
+    const raw = fs.readFileSync(p, 'utf-8').trim();
+    res.type('text/plain').send(raw);
+  } catch (e) {
+    res.status(500).type('text/plain').send('read revocation list failed');
   }
 });
 

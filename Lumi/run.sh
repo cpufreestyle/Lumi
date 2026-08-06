@@ -18,15 +18,18 @@ if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
 fi
 
 APP=.build/Lumi.app
+# 固定使用 macOS 26.5 SDK 构建：当前 27 SDK 下 SwiftPM 无法解析 SwiftUI 的
+# SwiftUIMacros 宏插件（环境回归），指定 26.5 SDK 可稳定编译通过。
+LUMI_SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
 # 动态获取 swift build 真实产物路径（不同 SwiftPM 版本的 triple 子目录不同）
-BIN_PATH="$(swift build --show-bin-path 2>/dev/null || echo .build/debug)"
+BIN_PATH="$(swift build --sdk "$LUMI_SDK" --show-bin-path 2>/dev/null || echo .build/debug)"
 BIN="$BIN_PATH/Lumi"
 BID=com.lumi.app
 
 # ---------- 编译 ----------
 build() {
-  echo "🎵 正在编译 Lumi..."
-  if ! swift build > /tmp/lumi_swiftbuild.log 2>&1; then
+  echo "🎵 正在编译 Lumi (SDK: MacOSX26.5)..."
+  if ! swift build --sdk "$LUMI_SDK" > /tmp/lumi_swiftbuild.log 2>&1; then
     echo "❌ 编译失败："
     tail -25 /tmp/lumi_swiftbuild.log
     exit 1
