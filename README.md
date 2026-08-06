@@ -136,6 +136,29 @@ swift run license-tool revoke-list --nonces <N1>,<N2>
 - 源码位于 `Lumi/Sources/Lumi/`，按 `Core`（状态/许可证）、`Modules`（各功能模块）、`Views`（界面）组织。
 - 构建与运行统一通过 `Lumi/run.sh`：`build` 编译、`launch` 启动、`restart` 重新编译并启动。
 
+### 在 Cursor / VS Code 中调试（CodeLLDB）
+
+项目已内置 `.vscode/` 配置，安装 **CodeLLDB** 扩展后即可断点调试 Swift。
+
+1. 安装扩展：`vadimcn.vscode-lldb`（及 Swift 语言支持 `sswg.swift-lang`）。
+2. `Cmd/Ctrl + Shift + D` 打开运行视图，选择下列配置之一按 `F5`：
+
+   | 配置 | 行为 |
+   | --- | --- |
+   | `Lumi (build & run)` | 编译 debug 产物并直接启动（无 TCC 包装，适合快速验证） |
+   | `Lumi (.app build & run)` | 编译 + 打包 + 授权，启动完整 `.build/Lumi.app`（带 Music 自动化等系统权限） |
+   | `Lumi (attach & wait)` | 自动等待 `Lumi` 进程启动并附加调试器（适合排查已授权 App 的运行问题） |
+
+3. 若调试带系统权限的完整 App 时权限异常，先执行一次：
+
+   ```bash
+   cd Lumi && ./run.sh tcc
+   ```
+
+   把 `com.lumi.app` 写入用户级 TCC 授权库（仅用户级，不影响系统级数据库）。
+
+> 提示：调试器默认使用 Xcode 工具链（`DEVELOPER_DIR` 指向 Xcode），以正确解析 SwiftUI 宏。固定使用 `MacOSX26.5.sdk` 构建（见 `run.sh` 注释），当前 27 SDK 下 SwiftPM 无法解析 SwiftUI 宏插件。
+
 ## License
 
 本项目版权归作者所有，详见各模块许可证说明。

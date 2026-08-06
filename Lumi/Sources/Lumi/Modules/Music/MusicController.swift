@@ -20,6 +20,14 @@ final class MusicController: ObservableObject {
     }
     private let showLyricsKey = "music_show_lyrics"
 
+    /// 歌词时间轴校准偏移（秒）。lrclib/社区 LRC 的时间轴常以 Apple Music 基准标注，
+    /// 但实际播放位置可能整体早/晚数秒（前奏 offset 差异），导致逐行高亮错位。
+    /// 正值表示歌词时间轴比实际播放「快」了这么多，需要把匹配基准往后推。
+    @Published var lyricsOffset: TimeInterval = 0 {
+        didSet { UserDefaults.standard.set(lyricsOffset, forKey: lyricsOffsetKey) }
+    }
+    private let lyricsOffsetKey = "music_lyrics_offset"
+
     enum PlaybackState { case playing, paused, stopped }
 
     private var timer: Timer?
@@ -42,6 +50,7 @@ final class MusicController: ObservableObject {
 
     private init() {
         showLyrics = UserDefaults.standard.object(forKey: showLyricsKey) as? Bool ?? true
+        lyricsOffset = UserDefaults.standard.object(forKey: lyricsOffsetKey) as? TimeInterval ?? 0
         startTimer()
     }
 
@@ -419,9 +428,11 @@ final class MusicController: ObservableObject {
                                  title: String, artist: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            // 写回前确认仍是同一首歌，避免串词
-            guard self.title == title || title.isEmpty,
-                  self.lyrics.isEmpty else { return }
+            // 写回前确认仍是同一首歌，避免串词。
+            // 注意：不要要求 self.lyrics.isEmpty —— 否则播放中歌词异步返回时，
+            // 若歌词字段已被占用（或正处于某次清空/重试间隙之外）就会被整条丢弃，
+            // 只有切歌/暂停等让 lyrics 恰好为空的瞬间才写进去，表现为「暂停才显示」。
+            guard self.title == title || title.isEmpty else { return }
             if !synced.isEmpty {
                 self.syncedLines = synced
                 // 收缩态/无时间轴兜底展示：用 synced 的文本

@@ -102,6 +102,9 @@ struct MusicExpandedView: View {
     @ObservedObject private var music = MusicController.shared
 
     var body: some View {
+        // 整体包一层 ScrollView：面板高度上限(456)内内容超出时整块滚动，
+        // 避免底部歌词区被 maxHeight 裁切（尤其播放中带频谱时总高超上限）。
+        ScrollView {
         VStack(spacing: 0) {
             // 专辑封面
             albumArtworkSection
@@ -134,7 +137,7 @@ struct MusicExpandedView: View {
             // 音频可视化频谱
             if music.isPlaying {
                 AudioVisualizer()
-                    .frame(height: 40)
+                    .frame(height: 28)
                     .padding(.horizontal, 24)
                     .padding(.top, 12)
             }
@@ -143,8 +146,8 @@ struct MusicExpandedView: View {
             lyricsSection
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
-
-            Spacer()
+                .padding(.bottom, 16)
+        }
         }
     }
 
@@ -201,8 +204,18 @@ struct MusicExpandedView: View {
                             height: 4
                         )
                 }
+                // 点击 / 拖动进度条跳转到对应位置
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard music.duration > 0 else { return }
+                        let ratio = min(1, max(0, value.location.x / geo.size.width))
+                        music.seek(to: ratio * music.duration)
+                    }
+                )
             }
             .frame(height: 4)
+            .padding(.vertical, 8)
 
             HStack {
                 Text(formatTime(music.currentTime))
@@ -288,7 +301,30 @@ struct MusicExpandedView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else if !music.syncedLines.isEmpty {
                         // Apple Music 官方歌词（带时间轴）：逐行高亮当前播放行。
-                        LyricsSyncView(lines: music.syncedLines, currentTime: music.currentTime)
+                        // 时间轴校准滑块：社区 LRC 时间轴常与播放位置有整体偏移，可手动对齐。
+                        if music.lyricsOffset != 0 || music.playbackState == .playing {
+                            HStack(spacing: 6) {
+                                Text("校准")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.45))
+                                Slider(value: $music.lyricsOffset, in: -10...10, step: 0.5)
+                                    .frame(width: 130)
+                                Text(String(format: "%+.1fs", music.lyricsOffset))
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .frame(width: 44, alignment: .trailing)
+                            }
+                            .padding(.bottom, 4)
+                        }
+                        LyricsSyncView(lines: music.syncedLines,
+                                       currentTime: music.currentTime,
+                                       offset: music.lyricsOffset) { delta in
+                            // 一键对齐：用户点击「当前在唱」的那行，反推 offset 并夹在 ±10s
+                            var v = delta
+                            v = max(-10, min(10, v))
+                            v = round(v / 0.5) * 0.5
+                            music.lyricsOffset = v
+                        }
                             .frame(maxHeight: 140)
                     } else {
                         ScrollView {
@@ -384,13 +420,18 @@ struct MiniVisualizer: View {
 struct LyricsSyncView: View {
     let lines: [SyncedLine]
     let currentTime: TimeInterval
+    /// 时间轴校准偏移（秒）。正值表示歌词时间轴比实际播放快，需要把匹配基准往后推。
+    var offset: TimeInterval = 0
+    /// 点击某行即「一键对齐」：该行此刻应在唱，自动算出 offset = 行时间 - 当前进度。
+    var onAlign: ((TimeInterval) -> Void)? = nil
 
-    /// 当前应高亮的行索引：最后一个 time <= currentTime 的行（time<0 视为无时间轴，不高亮）。
+    /// 当前应高亮的行索引：最后一个 time <= (currentTime - offset) 的行（time<0 视为无时间轴，不高亮）。
+    private var adjustedTime: TimeInterval { currentTime - offset }
     private var activeIndex: Int? {
         var idx: Int?
         for (i, line) in lines.enumerated() {
             guard line.time >= 0 else { continue }
-            if line.time <= currentTime { idx = i }
+            if line.time <= adjustedTime { idx = i }
             else { break }
         }
         return idx
@@ -410,6 +451,12 @@ struct LyricsSyncView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .lineSpacing(4)
                             .id(i)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                // 点击即对齐：该行此刻应在唱，反推 offset
+                                guard line.time >= 0 else { return }
+                                onAlign?(line.time - currentTime)
+                            }
                             .animation(.easeInOut(duration: 0.2), value: i == activeIndex)
                     }
                     .padding(.vertical, 4)

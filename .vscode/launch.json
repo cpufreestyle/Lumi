@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Lumi (build & run)",
+      "type": "lldb",
+      "request": "launch",
+      "preLaunchTask": "swift-build-lumi",
+      "program": "${workspaceFolder}/Lumi/.build/debug/Lumi",
+      "args": [],
+      "cwd": "${workspaceFolder}/Lumi",
+      "env": {
+        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
+      },
+      "stopOnEntry": false
+    },
+    {
+      "name": "Lumi (.app build & run)",
+      "type": "lldb",
+      "request": "launch",
+      "preLaunchTask": "swift-build-lumi",
+      "program": "${workspaceFolder}/Lumi/.build/Lumi.app/Contents/MacOS/Lumi",
+      "args": [],
+      "cwd": "${workspaceFolder}/Lumi",
+      "env": {
+        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
+      },
+      "stopOnEntry": false
+    },
+    {
+      "name": "Lumi (attach & wait)",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/Lumi/.build/Lumi.app/Contents/MacOS/Lumi",
+      "processCreateCommands": [
+        "process attach --name Lumi --waitfor"
+      ]
+    }
+  ]
+}

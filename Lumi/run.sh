@@ -184,7 +184,6 @@ case "${1:-}" in
     open "$APP"
     echo "REOPENED_OK" ;;
   check)
-  check)
     pids=$(pgrep -f "Contents/MacOS/Lumi")
     [ -n "$pids" ] && echo "RUNNING pids=$pids" || echo "NOT_RUNNING" ;;
   tcc)     tcc "${@:2}" ;;
