@@ -8,7 +8,15 @@ final class LiveDetectionController: ObservableObject {
     static let shared = LiveDetectionController()
 
     @Published var detections: [DetectionItem] = []
+    @Published var showManualSettings: Bool = false
     private var timer: Timer?
+
+    // 手动覆盖：label -> 状态（active），nil 表示使用自动检测
+    private var manualActive: [String: Bool] = [:]
+    // 手动覆盖：label -> 显示文本
+    private var manualValue: [String: String] = [:]
+    private let manualActiveKey = "live_manual_active"
+    private let manualValueKey  = "live_manual_value"
 
     struct DetectionItem: Identifiable {
         let id = UUID()
@@ -17,6 +25,7 @@ final class LiveDetectionController: ObservableObject {
         let value: String
         let active: Bool
         let category: Category
+        let manual: Bool
 
         enum Category: String, CaseIterable {
             case audio = "音频"
@@ -27,15 +36,71 @@ final class LiveDetectionController: ObservableObject {
     }
 
     private init() {
+        manualActive = UserDefaults.standard.dictionary(forKey: manualActiveKey) as? [String: Bool] ?? [:]
+        manualValue  = UserDefaults.standard.dictionary(forKey: manualValueKey)  as? [String: String] ?? [:]
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
 
+    // MARK: - 手动覆盖 API
+
+    /// 是否为某项设置了手动覆盖
+    func isManual(_ label: String) -> Bool {
+        manualActive[label] != nil || manualValue[label] != nil
+    }
+
+    /// 设置手动状态（nil 表示清除）
+    func setManualActive(_ label: String, _ value: Bool?) {
+        if let value = value {
+            manualActive[label] = value
+        } else {
+            manualActive.removeValue(forKey: label)
+        }
+        UserDefaults.standard.set(manualActive, forKey: manualActiveKey)
+        refresh()
+    }
+
+    /// 设置手动显示文本（nil / 空 表示清除）
+    func setManualValue(_ label: String, _ value: String?) {
+        if let value = value, !value.trimmingCharacters(in: .whitespaces).isEmpty {
+            manualValue[label] = value
+        } else {
+            manualValue.removeValue(forKey: label)
+        }
+        UserDefaults.standard.set(manualValue, forKey: manualValueKey)
+        refresh()
+    }
+
+    /// 清除某项的全部手动设置
+    func clearManual(_ label: String) {
+        manualActive.removeValue(forKey: label)
+        manualValue.removeValue(forKey: label)
+        UserDefaults.standard.set(manualActive, forKey: manualActiveKey)
+        UserDefaults.standard.set(manualValue, forKey: manualValueKey)
+        refresh()
+    }
+
     func refresh() {
         DispatchQueue.main.async {
-            self.detections = self.collectDetections()
+            let auto = self.collectDetections()
+            // 应用手动覆盖
+            var result: [DetectionItem] = []
+            for item in auto {
+                let overridden = self.isManual(item.label)
+                let finalActive = self.manualActive[item.label] ?? item.active
+                let finalValue  = self.manualValue[item.label] ?? item.value
+                result.append(DetectionItem(
+                    icon: item.icon,
+                    label: item.label,
+                    value: finalValue,
+                    active: finalActive,
+                    category: item.category,
+                    manual: overridden
+                ))
+            }
+            self.detections = result
         }
     }
 
@@ -48,7 +113,8 @@ final class LiveDetectionController: ObservableObject {
                                     label: "系统音量",
                                     value: "\(Int(volume * 100))%",
                                     active: volume > 0,
-                                    category: .audio))
+                                    category: .audio,
+                                    manual: false))
 
         // 静音
         let muted = volume == 0
@@ -56,7 +122,8 @@ final class LiveDetectionController: ObservableObject {
                                     label: "静音状态",
                                     value: muted ? "已静音" : "正常",
                                     active: muted,
-                                    category: .audio))
+                                    category: .audio,
+                                    manual: false))
 
         // 屏幕亮度
         let brightness = getBrightness()
@@ -64,7 +131,8 @@ final class LiveDetectionController: ObservableObject {
                                     label: "屏幕亮度",
                                     value: "\(Int(brightness * 100))%",
                                     active: brightness > 0.8,
-                                    category: .display))
+                                    category: .display,
+                                    manual: false))
 
         // 暗色模式
         let darkMode = NSApp.effectiveAppearance.name == .darkAqua ||
@@ -73,7 +141,8 @@ final class LiveDetectionController: ObservableObject {
                                     label: "外观模式",
                                     value: darkMode ? "深色" : "浅色",
                                     active: false,
-                                    category: .display))
+                                    category: .display,
+                                    manual: false))
 
         // 专注模式
         let isDoNotDisturb = checkDoNotDisturb()
@@ -81,7 +150,8 @@ final class LiveDetectionController: ObservableObject {
                                     label: "专注模式",
                                     value: isDoNotDisturb ? "已开启" : "未开启",
                                     active: isDoNotDisturb,
-                                    category: .system))
+                                    category: .system,
+                                    manual: false))
 
         // 蓝牙
         let bluetoothOn = checkBluetooth()
@@ -89,7 +159,8 @@ final class LiveDetectionController: ObservableObject {
                                     label: "蓝牙",
                                     value: bluetoothOn ? "已开启" : "已关闭",
                                     active: bluetoothOn,
-                                    category: .connectivity))
+                                    category: .connectivity,
+                                    manual: false))
 
         // 当前前台应用
         if let frontApp = NSWorkspace.shared.frontmostApplication?.localizedName {
@@ -97,17 +168,29 @@ final class LiveDetectionController: ObservableObject {
                                         label: "当前应用",
                                         value: frontApp,
                                         active: true,
-                                        category: .system))
+                                        category: .system,
+                                        manual: false))
         }
 
         // 电池
         let batteryInfo = getBatteryInfo()
-        if let (level, charging) = batteryInfo {
-            items.append(DetectionItem(icon: charging ? "battery.100.bolt" : batteryIcon(for: level),
+        if let (level, charging, status) = batteryInfo {
+            let icon = charging
+                ? (level >= 1.0 ? "battery.100.bolt" : "battery.75.bolt")
+                : batteryIcon(for: level)
+            items.append(DetectionItem(icon: icon,
                                         label: "电池",
-                                        value: "\(Int(level * 100))%\(charging ? " 充电中" : "")",
+                                        value: "\(Int(level * 100))%\(charging ? " · 充电中" : "")",
                                         active: level < 0.2,
-                                        category: .system))
+                                        category: .system,
+                                        manual: false))
+            // 同时提供一条"充电状态"可供手动覆盖
+            items.append(DetectionItem(icon: charging ? "bolt.fill" : "bolt.slash",
+                                        label: "充电状态",
+                                        value: status,
+                                        active: charging,
+                                        category: .system,
+                                        manual: false))
         }
 
         return items
@@ -161,7 +244,8 @@ final class LiveDetectionController: ObservableObject {
         return 0.5
     }
 
-    private func getBatteryInfo() -> (Float, Bool)? {
+    /// 解析 pmset -g batt 输出，精确提取电量百分比与充电状态
+    private func getBatteryInfo() -> (Float, Bool, String)? {
         let task = Process()
         task.launchPath = "/usr/bin/pmset"
         task.arguments = ["-g", "batt"]
@@ -170,17 +254,43 @@ final class LiveDetectionController: ObservableObject {
         do {
             try task.run()
             task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let str = String(data: data, encoding: .utf8) {
-                let charging = str.contains("charging") || str.contains("AC Power")
-                let parts = str.components(separatedBy: CharacterSet.decimalDigits.inverted)
-                    .filter { !$0.isEmpty }
-                if let pct = parts.first, let level = Float(pct) {
-                    return (level / 100.0, charging)
-                }
+            guard let str = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                                   encoding: .utf8) else { return nil }
+
+            // 1) 百分比：匹配 "数字%"（电池 ID 后的数字后跟的是 ')' 而非 '%'，
+            //    因此 "%" 前只会出现电量百分比本身的数值）
+            guard let pctMatch = str.range(of: #"\d+%"#, options: .regularExpression),
+                  let level = Float(String(str[pctMatch]).dropLast()) else { return nil }
+            let levelFloat = min(max(level, 0), 100) / 100.0
+
+            // 2) 充电状态：基于整段输出按关键词优先级判定。
+            //    必须先把 "not charging" 排在 "charging" 之前，否则 "discharging" /
+            //    "not charging" 会因其包含 "charging" 子串而被误判为充电中。
+            let full = str.localizedLowercase
+            let charging: Bool
+            let displayStatus: String
+            if full.contains("not charging") {
+                charging = false
+                displayStatus = (full.contains("ac attached") || full.contains("ac power"))
+                    ? "已连接电源（未充电）" : "未充电"
+            } else if full.contains("finishing charge") {
+                charging = true;  displayStatus = "充电中（即将充满）"
+            } else if full.contains("charging") {
+                charging = true;  displayStatus = "充电中"
+            } else if full.contains("charged") {
+                charging = false; displayStatus = "已充满"
+            } else if full.contains("discharging") {
+                charging = false; displayStatus = "放电中（未充电）"
+            } else if full.contains("ac attached") || full.contains("ac power") {
+                charging = false; displayStatus = "已连接电源"
+            } else {
+                charging = false; displayStatus = "未充电"
             }
-        } catch {}
-        return nil
+
+            return (levelFloat, charging, displayStatus)
+        } catch {
+            return nil
+        }
     }
 
     private func batteryIcon(for level: Float) -> String {
@@ -201,14 +311,36 @@ struct LiveDetectionExpandedView: View {
     @ObservedObject private var detector = LiveDetectionController.shared
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ForEach(detector.categories, id: \.rawValue) { category in
-                    categorySection(category)
+        VStack(spacing: 0) {
+            // 顶部标题 + 手动设置按钮
+            HStack {
+                Text("环境检测")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                Spacer()
+                Button(action: { detector.showManualSettings.toggle() }) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.5))
                 }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 16)
             .padding(.top, 10)
+            .padding(.bottom, 4)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(detector.categories, id: \.rawValue) { category in
+                        categorySection(category)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+            }
+        }
+        .sheet(isPresented: $detector.showManualSettings) {
+            LiveManualSettingsView()
         }
     }
 
@@ -238,21 +370,146 @@ struct LiveDetectionExpandedView: View {
                 .font(.system(size: 12))
                 .foregroundColor(.white.opacity(0.8))
 
+            if item.manual {
+                Image(systemName: "hand.draw")
+                    .font(.system(size: 9))
+                    .foregroundColor(.orange)
+            }
+
             Spacer()
 
             Text(item.value)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(item.active ? .pink.opacity(0.9) : .white.opacity(0.5))
-
-            Circle()
-                .fill(item.active ? Color.pink : Color.white.opacity(0.2))
-                .frame(width: 6, height: 6)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
-        .background(Color.white.opacity(0.02))
+        .background(item.manual ? Color.orange.opacity(0.06) : Color.white.opacity(0.02))
         .cornerRadius(6)
         .padding(.bottom, 2)
+    }
+}
+
+// MARK: - 手动设置面板
+struct LiveManualSettingsView: View {
+    @ObservedObject private var detector = LiveDetectionController.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("手动设置环境状态")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.8))
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+
+            Text("自动检测不准时，可手动覆盖每一项的状态与显示文本。")
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.4))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+
+            ScrollView {
+                VStack(spacing: 10) {
+                    ForEach(detector.detections) { item in
+                        ManualRow(item: item)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+
+            Button(action: {
+                // 清除全部手动设置
+                for item in detector.detections { detector.clearManual(item.label) }
+            }) {
+                Text("清除全部手动设置")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(10)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 340, height: 460)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+        )
+    }
+}
+
+struct ManualRow: View {
+    @ObservedObject private var detector = LiveDetectionController.shared
+    let item: LiveDetectionController.DetectionItem
+    @State private var editingValue: String
+
+    init(item: LiveDetectionController.DetectionItem) {
+        self.item = item
+        _editingValue = State(initialValue: item.value)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: item.icon)
+                    .font(.system(size: 13))
+                    .foregroundColor(item.active ? .pink : .white.opacity(0.5))
+                    .frame(width: 20)
+
+                Text(item.label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+
+                Spacer()
+
+                // 状态开关
+                Toggle("", isOn: Binding(
+                    get: { item.active },
+                    set: { detector.setManualActive(item.label, $0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(SwitchToggleStyle(tint: .pink))
+                .scaleEffect(0.7)
+            }
+
+            // 手动数值输入
+            HStack(spacing: 6) {
+                TextField("显示文本（手动）", text: $editingValue)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white)
+                    .padding(7)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(6)
+                    .onSubmit { detector.setManualValue(item.label, editingValue) }
+
+                Button(action: { detector.setManualValue(item.label, editingValue) }) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.03))
+        .cornerRadius(10)
     }
 }
 

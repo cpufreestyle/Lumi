@@ -16,6 +16,7 @@ let package = Package(
                 .linkedFramework("EventKit"),
                 .linkedFramework("IOBluetooth"),
                 .linkedFramework("IOKit"),
+                .linkedFramework("CryptoKit"),
             ]
         )
     ]

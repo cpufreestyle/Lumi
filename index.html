@@ -589,6 +589,122 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ===== Premium Modal ===== */
+.premium-modal-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(10px);
+  animation: premFadeIn 0.2s ease;
+}
+@keyframes premFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.premium-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px 28px 24px;
+  max-width: 440px;
+  width: 90%;
+  box-shadow: 0 16px 64px rgba(0,0,0,0.6);
+  animation: premSlide 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes premSlide { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.premium-modal h2 {
+  text-align: center;
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+.premium-modal h2 span {
+  background: linear-gradient(135deg, #f59e0b, var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.premium-modal .subt {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text2);
+  margin-bottom: 20px;
+}
+.premium-flist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.premium-fitem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface2);
+  border-radius: 14px;
+  transition: 0.2s;
+}
+.premium-fitem:hover { background: rgba(255,255,255,0.06); }
+.premium-ficon {
+  font-size: 22px;
+  width: 36px; height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,113,178,0.12);
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.premium-ftxt { flex: 1; }
+.premium-ftxt .pft-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.premium-ftxt .pft-desc {
+  font-size: 11px;
+  color: var(--text2);
+}
+.premium-price-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255,113,178,0.05);
+  border-radius: 14px;
+}
+.premium-price {
+  font-size: 36px;
+  font-weight: 800;
+  background: linear-gradient(135deg, #f59e0b, var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.premium-price-sub {
+  text-align: left;
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.4;
+}
+.premium-close-btn {
+  display: block;
+  margin: 0 auto;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 8px 16px;
+  transition: 0.2s;
+  font-family: var(--font);
+}
+.premium-close-btn:hover { color: var(--text2); }
 </style>
 </head>
 <body>
@@ -748,6 +864,9 @@ body {
 <!-- Demo Banner -->
 <div class="demo-banner" id="demoBanner" style="display:none;">
   <span class="dot"></span> 演示模式 · 播放30秒预览
+  <button onclick="togglePremium()" style="margin-left:12px;background:linear-gradient(135deg,#f59e0b,#ff71b2);border:none;color:#fff;font-size:11px;font-weight:600;padding:4px 12px;border-radius:12px;cursor:pointer;font-family:var(--font);">
+    升级 Lumi
+  </button>
 </div>
 
 <!-- Toast -->
@@ -1617,6 +1736,63 @@ function showToast(msg) {
 
 // ============ Init ============
 init();
+</script>
+<!-- ===== Premium Modal ===== -->
+<div class="premium-modal-overlay" id="premiumModal" style="display:none;" onclick="if(event.target===this) togglePremium()">
+  <div class="premium-modal">
+    <h2>解锁 <span>Lumi 高级功能</span></h2>
+    <div class="subt">一次购买，永久使用。含所有未来 AI 功能更新。</div>
+
+    <div class="premium-flist">
+      <div class="premium-fitem">
+        <div class="premium-ficon">&#x1F9E0;</div>
+        <div class="premium-ftxt">
+          <div class="pft-name">Claude Code 集成</div>
+          <div class="pft-desc">内置 Claude AI 编程助手，随时问代码问题、调试建议、架构设计</div>
+        </div>
+      </div>
+      <div class="premium-fitem">
+        <div class="premium-ficon">&#x2728;</div>
+        <div class="premium-ftxt">
+          <div class="pft-name">Codex 集成</div>
+          <div class="pft-desc">代码解释、优化、Bug 查找、补全、翻译、测试生成</div>
+        </div>
+      </div>
+      <div class="premium-fitem">
+        <div class="premium-ficon">&#x2B07;&#xFE0F;</div>
+        <div class="premium-ftxt">
+          <div class="pft-name">视频下载 MP4/MP3</div>
+          <div class="pft-desc">从 1800+ 站点下载视频（MP4）或提取音频（MP3）</div>
+        </div>
+      </div>
+      <div class="premium-fitem">
+        <div class="premium-ficon">&#x1F680;</div>
+        <div class="premium-ftxt">
+          <div class="pft-name">未来所有 AI 功能</div>
+          <div class="pft-desc">所有后续新增 AI 功能的永久访问权限</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="premium-price-row">
+      <div class="premium-price">$29.99</div>
+      <div class="premium-price-sub">
+        一次性买断<br>终身有效
+      </div>
+    </div>
+
+    <button class="btn btn-primary" style="width:100%;margin-bottom:8px;" onclick="window.open('https://notchia-website.pages.dev/pricing','_blank')">
+      前往购买
+    </button>
+    <button class="premium-close-btn" onclick="togglePremium()">关闭</button>
+  </div>
+</div>
+
+<script>
+function togglePremium() {
+  const m = document.getElementById('premiumModal');
+  m.style.display = m.style.display === 'none' ? 'flex' : 'none';
+}
 </script>
 </body>
 </html>

@@ -7,27 +7,31 @@
 #    ./run.sh launch   打包(已编译) → 授权 → 启动
 #    ./run.sh restart  结束旧实例后重新启动
 #    ./run.sh check    查询是否正在运行
-#    ./run.sh tcc      仅写入用户级 TCC 授权
+#    ./run.sh tcc [--dry-run]  仅写入用户级 TCC 授权（--dry-run 仅预览）
 # =====================================================
 set -e
 cd "$(dirname "$0")"
 
+# 使用完整 Xcode 工具链以正确编译 SwiftUI 宏（否则默认命令行工具会编译失败）
+if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
+
 APP=.build/Lumi.app
-BIN=.build/arm64-apple-macosx/debug/Lumi
+# 动态获取 swift build 真实产物路径（不同 SwiftPM 版本的 triple 子目录不同）
+BIN_PATH="$(swift build --show-bin-path 2>/dev/null || echo .build/debug)"
+BIN="$BIN_PATH/Lumi"
 BID=com.lumi.app
 
 # ---------- 编译 ----------
 build() {
-  if [ ! -f "$BIN" ]; then
-    echo "🎵 正在编译 Lumi（首次可能需要一两分钟）..."
-    if ! swift build 2>&1 | tail -20; then
-      echo "❌ 编译失败：请确认已安装 Xcode 命令行工具 (xcode-select --install)"
-      exit 1
-    fi
-    echo "✅ 编译完成"
-  else
-    echo "ℹ️  已编译，跳过 swift build"
+  echo "🎵 正在编译 Lumi..."
+  if ! swift build > /tmp/lumi_swiftbuild.log 2>&1; then
+    echo "❌ 编译失败："
+    tail -25 /tmp/lumi_swiftbuild.log
+    exit 1
   fi
+  echo "✅ 编译完成"
 }
 
 # ---------- 打包 .app ----------
@@ -42,12 +46,18 @@ package() {
 }
 
 # ---------- 用户级 TCC 授权 ----------
+# 用法: ./run.sh tcc [--dry-run]
+#   --dry-run  仅打印将要执行的操作，不修改数据库
 tcc() {
   if [ ! -d "$APP" ]; then echo "NO_APP: 请先运行 build"; exit 1; fi
 
-  SYS_DB=/Library/Application\ Support/com.apple.TCC/TCC.db
+  local DRY_RUN=false
+  [ "${1:-}" = "--dry-run" ] && DRY_RUN=true
+
+  SYS_DB="/Library/Application Support/com.apple.TCC/TCC.db"
   DIR="$HOME/Library/Application Support/com.apple.TCC"
   USR_DB="$DIR/TCC.db"
+  BACKUP="$DIR/TCC.db.bak"
 
   echo "== 1. ad-hoc 签名（生成稳定 cdhash）=="
   codesign --force --deep --sign - "$APP" 2>/dev/null || true
@@ -75,7 +85,7 @@ tcc() {
   fi
   chmod 600 "$USR_DB" 2>/dev/null || true
 
-  echo "== 5. 写入授权记录 =="
+  echo "== 5. 写入授权记录（仅用户级数据库）=="
   SQL=""
   add_row () {
     local svc="$1" ioid="$2" icoi="$3"
@@ -90,7 +100,47 @@ INSERT OR REPLACE INTO access
   add_row "kTCCServiceBluetoothAlways" "UNUSED" ""
   add_row "kTCCServiceBluetooth" "UNUSED" ""
   [ -s /tmp/music.csreq ] && add_row "kTCCServiceAppleEvents" "com.apple.Music" "/tmp/music.csreq"
-  sqlite3 "$USR_DB" "$SQL"
+
+  # -- dry-run 模式：仅打印将要执行的操作 --
+  if $DRY_RUN; then
+    echo ""
+    echo "🔍 [DRY-RUN] 以下操作不会实际执行："
+    echo "  目标数据库: $USR_DB"
+    echo "  备份路径:   $BACKUP"
+    echo ""
+    echo "  即将执行的 SQL:"
+    echo "$SQL" | sed 's/^/    /'
+    echo ""
+    echo "  随后将重载 tccd 并验证写入结果。"
+    echo ""
+    echo "DRY-RUN 完成：未修改任何数据。去掉 --dry-run 以实际执行。"
+    return 0
+  fi
+
+  # -- 正常模式：写入前备份用户级数据库 --
+  if [ -f "$USR_DB" ]; then
+    cp -p "$USR_DB" "$BACKUP" 2>/dev/null \
+      || { echo "WARNING: 无法创建备份 ($BACKUP)，继续执行但存在风险"; }
+    if [ -f "$BACKUP" ]; then
+      echo "  📦 已备份用户级 TCC.db → $BACKUP"
+    fi
+  fi
+
+  # -- 写入用户级数据库，失败时提供回滚提示 --
+  if ! sqlite3 "$USR_DB" "$SQL" 2>/tmp/tcc_write_err; then
+    echo ""
+    echo "❌ 写入用户级 TCC.db 失败: $(cat /tmp/tcc_write_err)"
+    echo ""
+    if [ -f "$BACKUP" ]; then
+      echo "🔄 回滚方法："
+      echo "   cp \"$BACKUP\" \"$USR_DB\""
+      echo "   然后执行: killall tccd 2>/dev/null; launchctl kickstart -k \"gui/$(id -u)/com.apple.tccd\""
+    else
+      echo "⚠️  无可用备份，无法自动回滚。请手动检查 $USR_DB"
+    fi
+    echo ""
+    exit 1
+  fi
   chmod 600 "$USR_DB" 2>/dev/null || true
 
   echo "== 6. 重载 tccd =="
@@ -98,9 +148,12 @@ INSERT OR REPLACE INTO access
   launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" 2>/dev/null || true
   sleep 1
 
-  echo "== 7. 验证 =="
+  echo "== 7. 验证（用户级） =="
   sqlite3 "$USR_DB" "SELECT service, allowed FROM access WHERE client='$BID';" 2>&1 | sed 's/^/    /'
   echo "DONE: 用户级权限已尝试自动授权（辅助功能无需授权）。"
+  if [ -f "$BACKUP" ]; then
+    echo "  📦 备份位于: $BACKUP"
+  fi
 }
 
 # ---------- 启动 ----------
@@ -118,10 +171,10 @@ launch() {
 case "${1:-}" in
   build)   build; package ;;
   launch)  launch ;;
-  restart) pkill -x Lumi 2>/dev/null || true; sleep 1; launch ;;
+  restart) pkill -x Lumi 2>/dev/null || true; sleep 1; build; launch ;;
   check)
     pids=$(pgrep -f "Contents/MacOS/Lumi")
     [ -n "$pids" ] && echo "RUNNING pids=$pids" || echo "NOT_RUNNING" ;;
-  tcc)     tcc ;;
+  tcc)     tcc "${@:2}" ;;
   *)       build; launch ;;
 esac

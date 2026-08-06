@@ -8,6 +8,9 @@ enum AppModule: String, CaseIterable, Identifiable {
     case focus = "专注"
     case clipboard = "剪贴板"
     case liveDetection = "检测"
+    case claudeCode = "Claude"
+    case codex = "Codex"
+    case videoDownload = "下载"
 
     var id: String { rawValue }
 
@@ -18,6 +21,9 @@ enum AppModule: String, CaseIterable, Identifiable {
         case .focus:       return "timer"
         case .clipboard:   return "doc.on.clipboard"
         case .liveDetection: return "antenna.radiowaves.left.and.right"
+        case .claudeCode:  return "brain.head.profile"
+        case .codex:       return "wand.and.stars"
+        case .videoDownload: return "arrow.down.to.line"
         }
     }
 
@@ -28,6 +34,29 @@ enum AppModule: String, CaseIterable, Identifiable {
         case .focus:       return "focus"
         case .clipboard:   return "clip"
         case .liveDetection: return "live"
+        case .claudeCode:  return "claude"
+        case .codex:       return "codex"
+        case .videoDownload: return "dl"
+        }
+    }
+
+    /// 是否为付费功能模块
+    var isPremium: Bool {
+        switch self {
+        case .claudeCode, .codex, .videoDownload:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 对应的付费功能类型
+    var premiumFeature: PremiumFeature? {
+        switch self {
+        case .claudeCode:  return .claudeCode
+        case .codex:       return .codex
+        case .videoDownload: return .videoDownload
+        default:           return nil
         }
     }
 }
@@ -42,5 +71,23 @@ final class AppState: ObservableObject {
     /// 动态岛是否悬浮显示（鼠标悬停时展开）
     @Published var isHovering: Bool = false
 
-    private init() {}
+    /// 是否显示许可证管理面板
+    @Published var showLicensePanel: Bool = false
+
+    /// 是否显示动态岛界面（总开关：关闭后整个胶囊不再出现）
+    @Published var islandEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(islandEnabled, forKey: islandEnabledKey) }
+    }
+    private let islandEnabledKey = "lumi_island_enabled"
+
+    private init() {
+        islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
+    }
+
+    /// 检查当前选中的模块是否可用（付费模块需已激活）
+    var canAccessActiveModule: Bool {
+        guard activeModule.isPremium else { return true }
+        guard let feature = activeModule.premiumFeature else { return true }
+        return LicenseManager.shared.isUnlocked(feature)
+    }
 }

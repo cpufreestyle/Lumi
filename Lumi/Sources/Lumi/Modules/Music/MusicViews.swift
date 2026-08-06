@@ -67,7 +67,7 @@ struct MusicBriefContent: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 if music.isPlaying {
-                    if !music.lyrics.isEmpty {
+                    if music.showLyrics, !music.lyrics.isEmpty {
                         MarqueeText(
                             text: music.lyrics.replacingOccurrences(of: "\n", with: "   •   "),
                             font: .system(size: 11, weight: .medium)
@@ -260,27 +260,57 @@ struct MusicExpandedView: View {
 
     // MARK: 歌词区
     var lyricsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("歌词")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.45))
-                .frame(maxWidth: .infinity, alignment: .leading)
+        // 用户可在右侧开关隐藏整块歌词
+        Group {
+            if music.showLyrics {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("歌词")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.45))
 
-            if music.lyrics.isEmpty {
-                Text("当前歌曲暂无内嵌歌词")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.4))
+                        Spacer()
+
+                        Button(action: { music.showLyrics = false }) {
+                            Image(systemName: "eye.slash")
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.45))
+                        }
+                        .buttonStyle(.plain)
+                        .help("隐藏歌词")
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ScrollView {
-                    Text(music.lyrics)
-                        .font(.system(size: 13))
-                        .foregroundColor(.white.opacity(0.78))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineSpacing(4)
-                        .padding(.vertical, 4)
+
+                    if music.lyrics.isEmpty {
+                        Text("当前歌曲暂无内嵌歌词")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.4))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ScrollView {
+                            Text(music.lyrics)
+                                .font(.system(size: 13))
+                                .foregroundColor(.white.opacity(0.78))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineSpacing(4)
+                                .padding(.vertical, 4)
+                        }
+                        .frame(maxHeight: 96)
+                    }
                 }
-                .frame(maxHeight: 96)
+            } else {
+                // 已隐藏：提供「显示歌词」入口
+                Button(action: { music.showLyrics = true }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "eye")
+                            .font(.system(size: 11))
+                        Text("显示歌词")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
             }
         }
     }

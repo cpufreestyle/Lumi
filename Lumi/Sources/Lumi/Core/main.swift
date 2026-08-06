@@ -12,8 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 提前初始化音乐控制器：使其在后台持续轮询播放状态，
         // 即使胶囊窗口处于隐藏(orderOut)状态也能实时更新，
-        // 避免弹出时才发现状态停留在初始的“未在播放”。
+        // 避免弹出时才发现状态停留在初始的"未在播放"。
         _ = MusicController.shared
+
+        // 提前加载许可证状态，检测付费功能是否可用
+        _ = LicenseManager.shared
 
         islandController = IslandWindowController()
         islandController?.show()
@@ -34,6 +37,8 @@ final class IslandWindowController: NSObject {
     private var cancellables = Set<AnyCancellable>()
     private var mouseMonitor: Any?
     private var hideTimer: Timer?
+    /// 记录上一次鼠标是否处于热区，用于区分"重新进入"与"停留在热区"
+    private var wasInZone: Bool = false
 
     /// 动态岛触发热区：屏幕顶部中央的一条不可见横带
     private let hotZoneHeight: CGFloat = 28
@@ -53,7 +58,9 @@ final class IslandWindowController: NSObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // 关闭窗口级方形阴影：否则会沿整个矩形边缘生成一圈透明直角光晕边框，
+        // 与圆角胶囊/面板不贴合。阴影改由 SwiftUI 内容的 .shadow 提供（沿圆角形状）。
+        panel.hasShadow = false
         panel.isMovableByWindowBackground = false
         panel.ignoresMouseEvents = false
         panel.hidesOnDeactivate = false
@@ -61,15 +68,15 @@ final class IslandWindowController: NSObject {
         // 关键：让 SwiftUI 内容填满整个窗口
         let hosting = NSHostingView(rootView: ContentView())
         hosting.autoresizingMask = [.width, .height]
-        // 必须让 hosting layer 完全透明，否则窗口级阴影会沿整个矩形边缘
-        // 生成一圈方形光晕（“透明外壳”），而非沿胶囊圆角形状。
+        // 让 hosting layer 完全透明，圆角形状由 SwiftUI 内容的 RoundedRectangle 承载；
+        // 面板级阴影已关闭，故不会再有沿矩形边缘的透明直角光晕。
         hosting.wantsLayer = true
         hosting.layer?.backgroundColor = NSColor.clear.cgColor
         panel.contentView = hosting
 
         self.window = panel
 
-        // 平时隐藏，仅鼠标碰触顶部动态岛热区时弹出
+        // 平时完全隐藏，仅鼠标碰触顶部动态岛热区时才弹出
         panel.orderOut(nil)
 
         // 全局鼠标移动监控：判断指针是否进入动态岛热区
@@ -106,6 +113,22 @@ final class IslandWindowController: NSObject {
                 }
             }
             .store(in: &cancellables)
+
+        // 显示开关：关闭=立即隐藏；打开=按当前鼠标位置决定是否弹出
+        AppState.shared.$islandEnabled
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled in
+                AppState.shared.isExpanded = false
+                if enabled {
+                    self?.evaluateHotZone()
+                } else {
+                    // 手动隐藏：立即收起，并标记当前仍在热区内，
+                    // 避免鼠标未移动时立刻重新弹出（需离开再触碰才会显示）
+                    self?.wasInZone = true
+                    self?.hideIsland()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     /// 判断鼠标是否进入"动态岛"热区（顶部中央横带），据此弹出/收起
@@ -118,6 +141,18 @@ final class IslandWindowController: NSObject {
         let zoneX = f.midX - 160
         let inZone = mouse.y >= f.maxY - hotZoneHeight
                    && mouse.x >= zoneX && mouse.x <= zoneX + 320
+
+        if !AppState.shared.islandEnabled {
+            // 已隐藏：只有"离开热区后重新进入"才会重新显示（触碰动态岛即显示）
+            if inZone, !wasInZone {
+                AppState.shared.islandEnabled = true
+                showIsland()
+            }
+            wasInZone = inZone
+            return
+        }
+
+        wasInZone = inZone
         if inZone {
             hideTimer?.invalidate(); hideTimer = nil
             showIsland()
@@ -141,7 +176,6 @@ final class IslandWindowController: NSObject {
     }
 
     private func hideIsland() {
-        guard !AppState.shared.isExpanded else { return }
         window?.orderOut(nil)
     }
 
