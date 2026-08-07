@@ -113,8 +113,10 @@ final class MusicController: ObservableObject {
     private var queueTitle = ""
     private var queueArtist = ""
     /// 歌词翻译缓存：原文 -> 翻译。避免同一句歌词反复请求翻译 API（省流量 + 防限流）。
-    /// 仅在 scriptQueue 上写入；主线程读取用于重建 syncedLines（已同步过）。
+    /// 所有读写都收敛到 translationQueue（串行），防止与重建 syncedLines 的主线程访问产生数据竞争。
     private var translationCache: [String: String] = [:]
+    /// 翻译缓存专用串行队列：统一保护 translationCache 的读写，避免跨线程字典崩溃。
+    private let translationQueue = DispatchQueue(label: "com.lumi.music.translation")
     /// AppleScript 为同步阻塞调用（约 100–300ms），必须在后台串行队列执行，
     /// 否则 1.5 秒轮询会周期性卡住主线程。
     private let scriptQueue = DispatchQueue(label: "com.lumi.music.script", qos: .utility)
@@ -343,10 +345,14 @@ final class MusicController: ObservableObject {
     /// 策略：清洗曲名（移除 (Bonus Track) / - Remastered 等版本后缀）→ 优先精确匹配，
     /// 失败再回退到原始曲名；使用更宽松的 /api/search 接口。
     private func fetchLyricsOnline(artist: String, title: String) {
+        // 候选歌名：清洗后的简体名 + 原始名 + 原始名的简体，尽量覆盖 lrclib 收录形态。
+        // lrclib 中文歌词多为简体收录，繁体歌名直接搜常落空，故显式加入简体变体。
         var tracks: [String] = []
         let cleaned = cleanTrackTitle(title)
-        if !cleaned.isEmpty { tracks.append(cleaned) }
-        if !title.isEmpty, !tracks.contains(title) { tracks.append(title) }
+        let simpTitle = toSimplified(title)
+        for t in [cleaned, simpTitle, title] where !t.isEmpty {
+            if !tracks.contains(t) { tracks.append(t) }
+        }
 
         // 候选组合：先带歌手精确搜，再逐步放宽。
         // 很多歌搜不到是因为 Music 里的歌手字段是 "A & B" / "A feat. B" /
@@ -403,11 +409,20 @@ final class MusicController: ObservableObject {
         return s.trimmingCharacters(in: .whitespaces)
     }
 
-    /// 移除曲名里的版本/括号后缀，提高在线匹配成功率
+    /// 移除曲名里的版本/括号后缀，提高在线匹配成功率。
+    /// 同时把繁体转简体：lrclib 等公开源的中文歌词多为简体收录，
+    /// 直接用繁体歌名（如「瀟洒小姐」）搜索常落空，转简体后能命中。
     private func cleanTrackTitle(_ t: String) -> String {
-        var s = t
+        var s = toSimplified(t)
+        // 英文括号 / 方括号后缀
         s = s.replacingOccurrences(of: #"\([^)]*\)"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"\[[^\]]*\]"#, with: "", options: .regularExpression)
+        // 中文括号后缀（全角）
+        s = s.replacingOccurrences(of: #"（[^）]*）"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"【[^】]*】"#, with: "", options: .regularExpression)
+        // 常见中文后缀（伴奏 / 国语 / 粤语 / Live / 现场 等版本标记）
+        s = s.replacingOccurrences(of: #"(伴奏|伴唱|国语|粤语|普通话|Live|live|现场|原版|Remaster|remaster).*$"#,
+                                   with: "", options: .regularExpression)
         if let r = s.range(of: " - ") { s.removeSubrange(r.lowerBound...) }
         return s.trimmingCharacters(in: .whitespaces)
     }
@@ -650,16 +665,26 @@ final class MusicController: ObservableObject {
         let capped = Array(targets.prefix(60))
         scriptQueue.async { [weak self] in
             guard let self = self else { return }
+            let group = DispatchGroup()
             for (_, line) in capped {
                 let src = line.text
-                if self.translationCache[src] != nil { continue }
+                // 查缓存走 translationQueue 串行，避免跨线程读写字典
+                var cached: String?
+                self.translationQueue.sync { cached = self.translationCache[src] }
+                if cached != nil { continue }
+                group.enter()
                 self.translate(text: src) { [weak self] tr in
+                    defer { group.leave() }
                     guard let self = self else { return }
                     if let tr = tr, !tr.isEmpty {
-                        self.scriptQueue.async { self.translationCache[src] = tr }
+                        self.translationQueue.async { self.translationCache[src] = tr }
                     }
-                    self.rebuildSyncedWithTranslations(title: title)
                 }
+            }
+            // 所有翻译（含缓存命中的）完成后统一重建一次，避免逐行重建的高频并发，
+            // 也避免 MyMemory 限流时每句回调都触发一次重建。
+            group.notify(queue: self.scriptQueue) {
+                self.rebuildSyncedWithTranslations(title: title)
             }
         }
     }
@@ -667,15 +692,25 @@ final class MusicController: ObservableObject {
     /// 根据翻译缓存重建 syncedLines（为每行缺失 translation 的行补全译文）。
     /// 仅当仍是同一首歌时写回，避免串词。
     private func rebuildSyncedWithTranslations(title: String) {
+        // 同步从 translationQueue 取快照到局部变量，再回到主线程重建。
+        // 必须 sync 取快照（而非在 translationQueue.async 闭包里捕获 snapshot 再
+        // 跨到 DispatchQueue.main.async）：之前的 async 写法会让 snapshot 在后台队列
+        // 与主线程闭包之间被多次并发捕获，配合 translationCache 的并发写入触发
+        // 字典桥接损坏（unrecognized selector objectForKey: sent to NSNumber），导致崩溃。
+        var snapshot: [String: String] = [:]
+        translationQueue.sync { snapshot = self.translationCache }
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             guard self.title == title || title.isEmpty else { return }
-            let rebuilt = self.syncedLines.map { line -> SyncedLine in
-                if line.translation != nil { return line }
-                if let tr = self.translationCache[line.text], !tr.isEmpty {
-                    return SyncedLine(text: line.text, time: line.time, translation: tr)
+            let synced = self.syncedLines
+            var rebuilt = synced
+            for i in synced.indices {
+                let line = synced[i]
+                if line.translation != nil { continue }
+                // 显式以 String? 取值，避免任何桥接把值当字典
+                if let tr = snapshot[line.text] as String?, !tr.isEmpty {
+                    rebuilt[i] = SyncedLine(text: line.text, time: line.time, translation: tr)
                 }
-                return line
             }
             // 仅在有变化时写回，减少无谓的 @Published 刷新
             if rebuilt != self.syncedLines { self.syncedLines = rebuilt }
@@ -687,13 +722,15 @@ final class MusicController: ObservableObject {
         guard bilingualMode != .off, !plain.isEmpty else { return }
         scriptQueue.async { [weak self] in
             guard let self = self else { return }
-            if let cached = self.translationCache[plain], !cached.isEmpty {
+            var cached: String?
+            self.translationQueue.sync { cached = self.translationCache[plain] }
+            if let cached = cached, !cached.isEmpty {
                 DispatchQueue.main.async { if self.title == title { self.lyricsTranslation = cached } }
                 return
             }
             self.translate(text: plain) { [weak self] tr in
                 guard let self = self, let tr = tr, !tr.isEmpty else { return }
-                self.scriptQueue.async { self.translationCache[plain] = tr }
+                self.translationQueue.async { self.translationCache[plain] = tr }
                 DispatchQueue.main.async {
                     if self.title == title || title.isEmpty { self.lyricsTranslation = tr }
                 }
@@ -732,9 +769,13 @@ final class MusicController: ObservableObject {
                 completion(nil)
                 return
             }
-            // MyMemory 配额超限时返回提示文本而非译文，过滤掉
+            // MyMemory 配额/限流时不会返回正常译文，而是返回提示文本（含 WARNING），
+            // 需要过滤掉，否则会把这些报错原文当成翻译显示出来。
             let lower = tr.lowercased()
-            if lower.contains("quota") || lower.contains("try again later") || lower.contains("please try again") {
+            let errorWords = ["quota", "try again later", "please try again",
+                              "used all available", "exceeded", "unavailable",
+                              "warning", "limit reached", "too many"]
+            if errorWords.contains(where: { lower.contains($0) }) {
                 completion(nil)
                 return
             }

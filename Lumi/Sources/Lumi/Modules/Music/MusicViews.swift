@@ -1,13 +1,19 @@
 import SwiftUI
 
 // MARK: - 跑马灯文本（用于收缩态显示过长歌词/标题）
+/// 恒定滚动速度（points/sec），长/短歌词观感一致，便于阅读。
 struct MarqueeText: View {
     let text: String
     let font: Font
+    /// 滚动速度：每列歌词在屏幕上移动的像素速度。恒定值保证不同长度歌词速度一致。
+    var speed: Double = 40
+    /// 一次滚动结束后停顿时长
+    var pause: Double = 1.2
+
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
     @State private var offset: CGFloat = 0
-    @State private var timer: Timer?
+    @State private var animating: Bool = false
 
     var body: some View {
         GeometryReader { geo in
@@ -35,16 +41,18 @@ struct MarqueeText: View {
         }
     }
 
+    /// 仅当文本超出容器时才滚动；速度恒定，长文本只是滚得更久而非更快。
     func restart() {
-        timer?.invalidate()
-        timer = nil
+        animating = false
         offset = 0
         guard textWidth > containerWidth, containerWidth > 0 else { return }
-        let total = textWidth + 24
-        timer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in
-            DispatchQueue.main.async {
-                offset -= 1
-                if -offset >= total { offset = containerWidth }
+        let distance = textWidth - containerWidth + 12
+        let duration = max(distance / max(speed, 1), 0.1)
+        animating = true
+        // 先停顿，再平滑滚动整段，结束后循环
+        DispatchQueue.main.asyncAfter(deadline: .now() + pause) {
+            withAnimation(.linear(duration: duration)) {
+                offset = -(textWidth + 12)
             }
         }
     }
@@ -58,29 +66,28 @@ struct WidthKey: PreferenceKey {
 // MARK: - 音乐模块：收缩态简要
 struct MusicBriefContent: View {
     @ObservedObject private var music = MusicController.shared
+    @ObservedObject private var state = AppState.shared
 
     var body: some View {
         HStack(spacing: 8) {
-            if music.isPlaying {
-                MiniVisualizer()
-                    .frame(width: 22, height: 14)
-            }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 if music.isPlaying {
                     if music.showLyrics, !music.currentLineText.isEmpty {
+                        // 当前歌词作为视觉焦点：放大并加粗
                         MarqueeText(
                             text: music.currentLineText,
-                            font: .system(size: 11, weight: .medium)
+                            font: .system(size: 12.5, weight: .semibold)
                         )
-                        .frame(height: 14)
+                        .frame(height: 16)
+                        // 次要信息（歌手/来源）进一步淡显，突出当前歌词
                         Text(music.artist.isEmpty ? "Apple Music" : music.artist)
-                            .font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.5))
+                            .font(.system(size: 8.5, weight: .regular))
+                            .foregroundColor(.white.opacity(0.32))
                             .lineLimit(1)
                     } else {
                         let fallback = "\(music.title.isEmpty ? "正在播放" : music.title)\(music.artist.isEmpty ? "" : " - " + music.artist)"
-                        MarqueeText(text: fallback, font: .system(size: 11, weight: .medium))
-                            .frame(height: 14)
+                        MarqueeText(text: fallback, font: .system(size: 12.5, weight: .semibold))
+                            .frame(height: 16)
                     }
                 } else {
                     Text("未在播放")
@@ -93,6 +100,21 @@ struct MusicBriefContent: View {
                         .lineLimit(1)
                 }
             }
+
+            // 固定小胶囊按钮：锁定后胶囊常驻显示，不随鼠标离开热区收起，
+            // 方便稳定阅读歌词。
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    AppState.shared.islandPinned.toggle()
+                }
+            } label: {
+                Image(systemName: state.islandPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(state.islandPinned ? .yellow : .white.opacity(0.5))
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.plain)
+            .help(state.islandPinned ? "取消固定小胶囊" : "固定小胶囊（常驻显示）")
         }
     }
 }
@@ -467,31 +489,6 @@ struct AudioVisualizer: View {
             saturation: 0.75,
             brightness: 0.45 + ratio * 0.45
         )
-    }
-}
-
-// MARK: - 迷你波形（收缩态）
-struct MiniVisualizer: View {
-    @State private var timer: Timer?
-    @State private var heights: [CGFloat] = Array(repeating: 3, count: 7)
-
-    var body: some View {
-        HStack(spacing: 1.2) {
-            ForEach(0..<7, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.pink.opacity(0.7))
-                    .frame(width: 2, height: max(2, heights[i]))
-                    .animation(.linear(duration: 0.1), value: heights[i])
-            }
-        }
-        .onAppear {
-            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-                DispatchQueue.main.async {
-                    heights = (0..<7).map { _ in CGFloat.random(in: 2...12) }
-                }
-            }
-        }
-        .onDisappear { timer?.invalidate() }
     }
 }
 

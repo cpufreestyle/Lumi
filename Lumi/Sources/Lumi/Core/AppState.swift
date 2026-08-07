@@ -80,8 +80,16 @@ final class AppState: ObservableObject {
     }
     private let islandEnabledKey = "lumi_island_enabled"
 
+    /// 是否将动态岛（小胶囊）锁定为常驻：开启后即使鼠标离开热区也不会自动收起，
+    /// 便于稳定查看歌词等内容。音乐模块常用。
+    @Published var islandPinned: Bool = false {
+        didSet { UserDefaults.standard.set(islandPinned, forKey: islandPinnedKey) }
+    }
+    private let islandPinnedKey = "lumi_island_pinned"
+
     private init() {
         islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
+        islandPinned = UserDefaults.standard.object(forKey: islandPinnedKey) as? Bool ?? false
     }
 
     /// 检查当前选中的模块是否可用（付费模块需已激活）

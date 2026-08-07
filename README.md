@@ -165,6 +165,7 @@ swift run license-tool revoke-list --nonces <N1>,<N2>
 
 1. 测试代码放在 `Lumi/Tests/LumiTests/`（`*Tests.swift`，方法以 `test` 开头）。
 2. 运行：
+
    - 编辑器：`Cmd/Ctrl + Shift + P` → Tasks: Run Task → `swift-test`（已设为默认测试任务）。
    - CLI：
 
@@ -173,6 +174,7 @@ swift run license-tool revoke-list --nonces <N1>,<N2>
      export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
      swift test
      ```
+
 3. **关键约束**：
    - `swift test` **必须**在 Xcode 工具链下运行（默认 27 SDK 解析不了 SwiftUI 宏）。
    - `testTarget` 不应引入 `AppKit`/`SwiftUI`/`WebKit` 等 GUI 框架（无登录会话下会链接/运行失败）。只测纯逻辑（CryptoKit、Foundation、算法、编解码、校验）。GUI 行为用调试配置手动验证。

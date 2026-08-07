@@ -42,6 +42,7 @@ final class LumiCoreTests: XCTestCase {
 ```
 
 运行：
+
 ```bash
 cd Lumi
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer

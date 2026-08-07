@@ -63,6 +63,17 @@ final class IslandWindowController: NSObject {
     /// 鼠标移出后延迟隐藏，避免抖动
     private let hideDelay: TimeInterval = 0.25
 
+    /// 用户手动调整的展开态窗口尺寸；为 nil 时回退到默认 360×480。
+    /// 持久化保存，下次展开沿用，避免每次都重新拖。
+    private var userSize: NSSize?
+
+    /// 展开态尺寸可调范围（夹紧用），防止拖到过小无法用或过大飞出屏幕。
+    private let minExpandedW: CGFloat = 320
+    private let maxExpandedW: CGFloat = 720
+    private let minExpandedH: CGFloat = 200
+    private let maxExpandedH: CGFloat = 820
+    private let userSizeKey = "island_user_size"
+
     /// 内置屏（MacBook 自带、带刘海的那块）。动态岛只在这块屏上出现，
     /// 外接显示器顶部不触发、也不展示面板。
     /// 判定优先级：safeAreaInsets.top > 0（有刘海）→ 内置显示器类型 → 主屏兜底。
@@ -99,6 +110,12 @@ final class IslandWindowController: NSObject {
     }
 
     func show() {
+        // 载入上次手动调整的窗口尺寸
+        if let s = UserDefaults.standard.array(forKey: userSizeKey) as? [CGFloat],
+           s.count == 2, s[0] > 0, s[1] > 0 {
+            userSize = NSSize(width: s[0], height: s[1])
+        }
+
         let panel = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -243,6 +260,8 @@ final class IslandWindowController: NSObject {
     /// 判断鼠标是否进入"动态岛"热区（顶部中央横带），据此弹出/收起
     private func evaluateHotZone() {
         guard !AppState.shared.isExpanded else { return }
+        // 锁定常驻：不根据热区变化收起/弹出，保持显示
+        guard !AppState.shared.islandPinned else { return }
         let mouse = NSEvent.mouseLocation
         guard let screen = builtInScreen else { return }
 
@@ -279,6 +298,11 @@ final class IslandWindowController: NSObject {
 
     private func scheduleHide() {
         guard AppState.shared.isExpanded == false else { return }
+        // 锁定常驻：已钉住则不安排收起，胶囊保持显示
+        guard !AppState.shared.islandPinned else {
+            hideTimer?.invalidate(); hideTimer = nil
+            return
+        }
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: hideDelay, repeats: false) { [weak self] _ in
             self?.hideIsland()
@@ -316,15 +340,40 @@ final class IslandWindowController: NSObject {
         let screenFrame = screen.visibleFrame
 
         let peeking = AppState.shared.isHovering && !expanded
-        let w: CGFloat = expanded ? 360 : 320
+        // 展开态尺寸优先用用户手动调整后的尺寸，否则默认 360×480
+        let w: CGFloat = expanded ? (userSize?.width ?? 360) : 320
         // 窗口高度精确等于内容高度，避免窗口比圆角内容大而露出多余的透明外框：
         // 收缩态 CollapsedView 高 42；peek 态 = 预览区 + 胶囊 42 + 底部 6；展开态 480。
-        let h: CGFloat = expanded ? 480 : (peeking ? 132 : 42)
+        // 收缩/peek 态高度固定，不受手动调整影响。
+        let h: CGFloat = expanded ? (userSize?.height ?? 480) : (peeking ? 132 : 42)
         // 居中于目标屏幕顶部，紧贴菜单栏下方，避开刘海
         let x = screenFrame.midX - w / 2
         let y = screenFrame.maxY - h - 6
 
         window?.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true, animate: true)
+    }
+
+    /// 手动缩放：基于当前窗口 frame，按拖拽增量调整展开态宽高。
+    /// dx 向右为正（增宽）；dy 向下为正（增高）。顶部锚定（origin.y 随高度变化）。
+    func resizeBy(_ delta: NSSize) {
+        guard let panel = window else { return }
+        var f = panel.frame
+        let top = f.origin.y + f.size.height
+        var newW = f.size.width + delta.width
+        var newH = f.size.height + delta.height
+        newW = min(max(newW, minExpandedW), maxExpandedW)
+        newH = min(max(newH, minExpandedH), maxExpandedH)
+        f.size = NSSize(width: newW, height: newH)
+        f.origin.y = top - newH
+        panel.setFrame(f, display: true, animate: false)
+    }
+
+    /// 拖拽结束后，把当前展开态尺寸持久化为用户尺寸，下次展开沿用。
+    func saveUserSize() {
+        guard let panel = window else { return }
+        let s = panel.frame.size
+        userSize = s
+        UserDefaults.standard.set([s.width, s.height], forKey: userSizeKey)
     }
 
     func toggleExpand() {

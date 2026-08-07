@@ -218,7 +218,7 @@ struct ExpandedView: View {
                     .frame(width: 32, height: 3)
                     .padding(.bottom, 8)
             }
-            .frame(width: 360, height: 480)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 22)
                     .fill(.ultraThinMaterial)
@@ -246,6 +246,11 @@ struct ExpandedView: View {
                         dragOffset = 0
                     }
             )
+
+            // 右下角手动缩放手柄：拖拽调整展开面板大小（尺寸持久化记忆）
+            ResizeHandle()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .padding(6)
 
             // 许可证管理面板
             if state.showLicensePanel {
@@ -933,5 +938,43 @@ struct LicensePanelView: View {
         case .revoked:
             return "激活码已被吊销，请重新激活或联系 support@lumi.app"
         }
+    }
+}
+
+// MARK: - 右下角手动缩放手柄
+/// 拖拽即可调整展开面板大小，尺寸上限/下限由窗口控制器夹紧，
+/// 松手后尺寸持久化，下次展开沿用。手柄手势挂在自身，不会被
+/// 面板的"下拉收起"全局手势误触发。
+struct ResizeHandle: View {
+    @State private var lastTranslation: CGSize = .zero
+    @State private var dragging = false
+
+    var body: some View {
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(.white.opacity(dragging ? 0.65 : 0.3))
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture()
+                    .onChanged { v in
+                        let delta = CGSize(
+                            width: v.translation.width - lastTranslation.width,
+                            height: v.translation.height - lastTranslation.height
+                        )
+                        SharedIslandController.controller?.resizeBy(delta)
+                        lastTranslation = v.translation
+                        dragging = true
+                    }
+                    .onEnded { _ in
+                        SharedIslandController.controller?.saveUserSize()
+                        lastTranslation = .zero
+                        dragging = false
+                    }
+            )
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() }
+                else { NSCursor.pop() }
+            }
     }
 }
