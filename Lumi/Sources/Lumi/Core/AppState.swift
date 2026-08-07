@@ -87,9 +87,14 @@ final class AppState: ObservableObject {
     }
     private let islandPinnedKey = "lumi_island_pinned"
 
+    /// 轻量自研检查更新单例（GitHub Release 比对）
+    let updater = Updater.shared
+
     private init() {
         islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
         islandPinned = UserDefaults.standard.object(forKey: islandPinnedKey) as? Bool ?? false
+        // 启动后静默检查一次更新（后台，不弹窗，除非发现新版本）
+        updater.autoCheckOnLaunch()
     }
 
     /// 检查当前选中的模块是否可用（付费模块需已激活）

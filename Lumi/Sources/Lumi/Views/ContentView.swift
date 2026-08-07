@@ -256,6 +256,9 @@ struct ExpandedView: View {
             if state.showLicensePanel {
                 licensePanelOverlay
             }
+
+            // 更新可用提示浮层（发现新版本时弹出）
+            UpdateAvailableBanner()
         }
         .offset(y: dragOffset)
         .animation(.easeInOut(duration: 0.25), value: state.showLicensePanel)
@@ -380,19 +383,23 @@ struct TabBarView: View {
                 // 隐藏整个界面（鼠标移到顶部可重新出现入口）。
                 // 用 overlay 而非放进 HStack：模块按钮是 maxWidth:.infinity 等分的，
                 // 同行放置会互相挤压导致重叠。
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        AppState.shared.islandEnabled = false
+                HStack(spacing: 6) {
+                    // 检查更新：点击手动触发，有新版本时图标高亮提示
+                    UpdateCheckButton()
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            AppState.shared.islandEnabled = false
+                        }
+                    }) {
+                        Image(systemName: "eye.slash")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
+                            .padding(7)
+                            .background(Circle().fill(Color.white.opacity(0.08)))
                     }
-                }) {
-                    Image(systemName: "eye.slash")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
-                        .padding(7)
-                        .background(Circle().fill(Color.white.opacity(0.08)))
+                    .buttonStyle(.plain)
+                    .help("隐藏界面（鼠标移到顶部可重新出现入口）")
                 }
-                .buttonStyle(.plain)
-                .help("隐藏界面（鼠标移到顶部可重新出现入口）")
                 .padding(.trailing, 8)
                 // 下移与模块图标视觉居中对齐
                 .padding(.top, 14)
@@ -976,5 +983,124 @@ struct ResizeHandle: View {
                 if inside { NSCursor.pointingHand.push() }
                 else { NSCursor.pop() }
             }
+    }
+}
+
+// MARK: - 检查更新按钮（TabBar 右上角）
+struct UpdateCheckButton: View {
+    @ObservedObject private var updater = Updater.shared
+
+    var body: some View {
+        Button(action: {
+            updater.checkForUpdates(force: true)
+        }) {
+            Image(systemName: iconName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(accentColor)
+                .padding(7)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+                .overlay(
+                    // 检查中转圈
+                    Group {
+                        if case .checking = updater.status {
+                            ProgressView()
+                                .scaleEffect(0.5)
+                                .frame(width: 26, height: 26)
+                        }
+                    }
+                )
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+    }
+
+    private var iconName: String {
+        switch updater.status {
+        case .available:  return "arrow.down.circle.fill"
+        case .failed:     return "exclamationmark.circle"
+        case .upToDate:   return "checkmark.circle"
+        default:          return "arrow.down.circle"
+        }
+    }
+
+    private var accentColor: Color {
+        switch updater.status {
+        case .available:  return .green
+        case .failed:     return .orange
+        case .upToDate:   return .white.opacity(0.5)
+        default:          return .white.opacity(0.5)
+        }
+    }
+
+    private var helpText: String {
+        switch updater.status {
+        case .available:  return "发现新版本 \(updater.latestVersion ?? "")，点击前往下载"
+        case .upToDate:   return "已是最新版本（\(updater.currentVersion)）"
+        case .failed(let m): return "检查更新失败：\(m)"
+        case .checking:   return "正在检查更新…"
+        default:          return "检查更新"
+        }
+    }
+}
+
+// MARK: - 新版本可用浮层（发现更新时提示）
+struct UpdateAvailableBanner: View {
+    @ObservedObject private var updater = Updater.shared
+
+    var body: some View {
+        // 仅在发现新版本且未忽略时显示；用 overlay 固定在顶部，不撑满、不拦截下方交互
+        if case .available = updater.status,
+           let latest = updater.latestVersion,
+           latest != updater.ignoredVersion {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("新版本 v\(latest) 可用")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white)
+                        Text("当前 v\(updater.currentVersion)")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    Spacer()
+                    Button(action: { updater.openRelease() }) {
+                        Text("前往下载")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing)
+                            )
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                    Button(action: { updater.ignoreCurrent() }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
+                            .padding(6)
+                    }
+                    .buttonStyle(.plain)
+                    .help("忽略此版本")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.green.opacity(0.3), lineWidth: 0.5))
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(true)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.easeInOut(duration: 0.25), value: updater.status)
+        }
     }
 }
