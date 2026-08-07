@@ -67,6 +67,11 @@ final class IslandWindowController: NSObject {
     /// 持久化保存，下次展开沿用，避免每次都重新拖。
     private var userSize: NSSize?
 
+    /// 拖拽缩放进行中：期间屏蔽 updateWindowFrame 的"重置回 userSize"逻辑，
+    /// 否则面板内鼠标移动触发 isHovering 变化 → applyState → updateWindowFrame
+    /// 会用旧 userSize 把窗口拽回原尺寸，导致右下角手柄"拖了等于没拖"。
+    private var isResizing: Bool = false
+
     /// 展开态尺寸可调范围（夹紧用），防止拖到过小无法用或过大飞出屏幕。
     private let minExpandedW: CGFloat = 320
     private let maxExpandedW: CGFloat = 720
@@ -334,6 +339,9 @@ final class IslandWindowController: NSObject {
     }
 
     func updateWindowFrame(expanded: Bool) {
+        // 拖拽缩放进行中：保持当前窗口 frame，不要用 userSize 重置，
+        // 否则手柄拖拽会被 isHovering 触发的本函数立即覆盖掉。
+        guard !isResizing else { return }
         // 固定定位到内置屏（带刘海那块）：动态岛只属于主屏，
         // 不跟随鼠标跑到外接显示器上。
         guard let screen = builtInScreen else { return }
@@ -355,8 +363,11 @@ final class IslandWindowController: NSObject {
 
     /// 手动缩放：基于当前窗口 frame，按拖拽增量调整展开态宽高。
     /// dx 向右为正（增宽）；dy 向下为正（增高）。顶部锚定（origin.y 随高度变化）。
+    /// 拖拽中实时把最新尺寸记到 userSize，确保即便 updateWindowFrame 被触发
+    /// 也只会沿用最新尺寸，不会把面板拽回拖拽前的旧大小。
     func resizeBy(_ delta: NSSize) {
         guard let panel = window else { return }
+        isResizing = true
         var f = panel.frame
         let top = f.origin.y + f.size.height
         var newW = f.size.width + delta.width
@@ -366,6 +377,8 @@ final class IslandWindowController: NSObject {
         f.size = NSSize(width: newW, height: newH)
         f.origin.y = top - newH
         panel.setFrame(f, display: true, animate: false)
+        // 实时更新内存中的用户尺寸，使 updateWindowFrame 与拖拽保持一致
+        userSize = f.size
     }
 
     /// 拖拽结束后，把当前展开态尺寸持久化为用户尺寸，下次展开沿用。
@@ -374,6 +387,8 @@ final class IslandWindowController: NSObject {
         let s = panel.frame.size
         userSize = s
         UserDefaults.standard.set([s.width, s.height], forKey: userSizeKey)
+        // 释放缩放锁，允许后续状态变化正常重排窗口
+        isResizing = false
     }
 
     func toggleExpand() {
