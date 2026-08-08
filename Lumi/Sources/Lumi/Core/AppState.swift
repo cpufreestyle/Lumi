@@ -107,6 +107,9 @@ final class AppState: ObservableObject {
     /// 标签栏里带 panel 的插件会作为独立标签，点击即设置此值并显示其内嵌面板。
     @Published var selectedPluginPanelID: String? = nil
 
+    /// 是否展开「插件市场」常驻页（独立于模块选择，作为顶部常驻「插件」标签）。
+    @Published var showPluginMarket: Bool = false
+
     private init() {
         islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
         islandPinned = UserDefaults.standard.object(forKey: islandPinnedKey) as? Bool ?? false

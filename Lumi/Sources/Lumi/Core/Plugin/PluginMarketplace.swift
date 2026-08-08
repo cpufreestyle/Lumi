@@ -16,13 +16,15 @@ final class PluginMarketplace: NSObject, ObservableObject {
     static let shared = PluginMarketplace()
 
     /// 官方源清单地址（可由维护者更新）。
-    /// 占位为 GitHub raw，实际部署时替换为你的官方清单。
     private let officialFeedURL = URL(string:
         "https://raw.githubusercontent.com/cpufreestyle/Lumi/main/Lumi/plugin-feed.json")
 
+    /// 市场分类（用于 UI 分段筛选）
+    static let categories = ["全部", "工具", "效率", "娱乐", "其它"]
+
     /// 已安装插件（来自 PluginDiscovery，便于判断「已装/未装」）
     @Published var installed: [PluginManifest] = []
-    /// 市场可安装清单
+    /// 市场可安装清单（合并所有启用源；按 id 去重，后加载的源优先）
     @Published var available: [PluginManifest] = []
     /// 拉取状态
     @Published var feedStatus: FeedStatus = .idle
@@ -30,6 +32,15 @@ final class PluginMarketplace: NSObject, ObservableObject {
     @Published var installProgress: [String: Double] = [:]
     /// 每个插件 id 的安装状态
     @Published var installState: [String: InstallState] = [:]
+    /// 有可用更新的插件（feed 版本比本地已安装更新），id -> feed 中的最新清单
+    @Published var updatesAvailable: [String: PluginManifest] = [:]
+    /// 社区源（用户自定义 feed URL），官方源恒启用，不在该列表内
+    @Published var customSources: [URL] = []
+    /// 是否启用社区源总开关（关闭则只拉官方源）
+    @Published var communitySourcesEnabled: Bool = false
+
+    private let customSourcesKey = "lumi_plugin_custom_sources"
+    private let communityEnabledKey = "lumi_plugin_community_enabled"
 
     enum FeedStatus: Equatable {
         case idle, loading, ready, failed(String)
@@ -63,9 +74,43 @@ final class PluginMarketplace: NSObject, ObservableObject {
     }()
 
     private override init() {
+        // 读取持久化的社区源设置
+        if let arr = UserDefaults.standard.array(forKey: customSourcesKey) as? [String] {
+            customSources = arr.compactMap { URL(string: $0) }
+        }
+        communitySourcesEnabled = UserDefaults.standard.bool(forKey: communityEnabledKey)
         // 同步已安装列表
         super.init()
         refreshInstalled()
+    }
+
+    /// 持久化社区源设置
+    func persistSources() {
+        UserDefaults.standard.set(customSources.map { $0.absoluteString },
+                                  forKey: customSourcesKey)
+        UserDefaults.standard.set(communitySourcesEnabled, forKey: communityEnabledKey)
+    }
+
+    /// 启用/关闭社区源总开关
+    func setCommunitySourcesEnabled(_ on: Bool) {
+        communitySourcesEnabled = on
+        persistSources()
+        loadFeed()
+    }
+
+    /// 添加自定义社区源
+    func addCustomSource(_ url: URL) {
+        guard !customSources.contains(url) else { return }
+        customSources.append(url)
+        persistSources()
+        loadFeed()
+    }
+
+    /// 移除自定义社区源
+    func removeCustomSource(_ url: URL) {
+        customSources.removeAll { $0 == url }
+        persistSources()
+        loadFeed()
     }
 
     // MARK: - 已安装同步
@@ -88,28 +133,66 @@ final class PluginMarketplace: NSObject, ObservableObject {
 
     // MARK: - 拉取市场清单
 
+    /// 当前应拉取的所有源（官方源恒在；社区源开启时追加自定义源）
+    private var activeSources: [URL] {
+        var src = [URL]()
+        if let official = officialFeedURL { src.append(official) }
+        if communitySourcesEnabled { src.append(contentsOf: customSources) }
+        return src
+    }
+
     func loadFeed(silent: Bool = false) {
         if !silent { feedStatus = .loading }
 
-        // 优先远程官方源；失败/超时则回退到 App 内置的 plugin-feed.json（离线可用）
-        if let url = officialFeedURL {
-            let task = session.dataTask(with: url) { [weak self] data, resp, err in
-                guard let self = self else { return }
+        let sources = activeSources
+        guard !sources.isEmpty else {
+            loadLocalFeed()
+            return
+        }
+
+        // 并发拉取所有启用源，合并去重（后加载的源优先级更高，覆盖同 id）
+        let group = DispatchGroup()
+        var collected: [[PluginManifest]] = []
+        for url in sources {
+            group.enter()
+            let task = session.dataTask(with: url) { data, _, _ in
+                defer { group.leave() }
                 if let data = data,
                    let feed = try? JSONDecoder().decode(PluginFeed.self, from: data) {
-                    DispatchQueue.main.async {
-                        self.available = feed.plugins
-                        self.feedStatus = .ready
-                        self.refreshInstalled()
-                    }
-                } else {
-                    self.loadLocalFeed()
+                    collected.append(feed.plugins)
                 }
             }
             task.resume()
-        } else {
-            loadLocalFeed()
         }
+        group.notify(queue: .main) { [weak self] in
+            guard let self = self else { return }
+            var merged: [String: PluginManifest] = [:]
+            for list in collected {
+                for p in list { merged[p.id] = p }
+            }
+            if merged.isEmpty {
+                // 所有远程源都失败 → 回退内置离线清单
+                self.loadLocalFeed()
+                return
+            }
+            self.available = Array(merged.values).sorted { $0.name < $1.name }
+            self.feedStatus = .ready
+            self.refreshInstalled()
+            self.checkUpdates()
+        }
+    }
+
+    /// 比对已安装插件与市场的版本，标记可更新的项
+    func checkUpdates() {
+        var updates: [String: PluginManifest] = [:]
+        for item in available {
+            if let local = installed.first(where: { $0.id == item.id }),
+               let lv = local.version, let fv = item.version,
+               PluginManifest.isVersion(fv, newerThan: lv) {
+                updates[item.id] = item
+            }
+        }
+        updatesAvailable = updates
     }
 
     /// 回退：从 App 包内 plugin-feed.json 读取（保证离线可演示）

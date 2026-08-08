@@ -35,6 +35,12 @@ struct PluginManifest: Codable, Identifiable, Hashable {
     let minHostVersion: String?
     /// 市场下载地址（仅来自市场清单，本地 manifest 一般不含）
     let downloadURL: URL?
+    /// 插件版本（语义化，如 "1.0.0"）。用于市场「可更新」判断。
+    let version: String?
+    /// 市场分类（如 "工具"/"效率"/"娱乐"/"其它"），用于市场分段筛选
+    let category: String?
+    /// 一句话简介（市场列表展示）
+    let summary: String?
     /// L3 深度集成标志：为 true 时插件会在 `Lumi/PluginPanels/<id>.json` 写入面板数据，
     /// Lumi 将其作为原生模块一样的动态模块挂载到标签栏与展开面板。
     let panel: Bool
@@ -61,10 +67,27 @@ struct PluginManifest: Codable, Identifiable, Hashable {
         return NSURL(string: "\(s)://") != nil
     }
 
+    /// 比较两个语义化版本字符串（"a.b.c"），返回 lhs 是否比 rhs 新。
+    /// 无法解析时返回 false（保守，不误报更新）。
+    static func isVersion(_ lhs: String, newerThan rhs: String) -> Bool {
+        let parse = { (v: String) -> [Int] in
+            v.split(separator: ".").compactMap { Int($0.filter { $0.isNumber }) }
+        }
+        let a = parse(lhs), b = parse(rhs)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        let n = max(a.count, b.count)
+        for i in 0..<n {
+            let x = a.count > i ? a[i] : 0
+            let y = b.count > i ? b[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+
     // MARK: - 解码容错
 
     enum CodingKeys: String, CodingKey {
-        case id, name, iconName, urlScheme, appName, permissions, panelHint, minHostVersion, downloadURL, panel
+        case id, name, iconName, urlScheme, appName, permissions, panelHint, minHostVersion, downloadURL, panel, version, category, summary
     }
 
     init(from decoder: Decoder) throws {
@@ -79,12 +102,16 @@ struct PluginManifest: Codable, Identifiable, Hashable {
         minHostVersion = try c.decodeIfPresent(String.self, forKey: .minHostVersion)
         downloadURL = try c.decodeIfPresent(URL.self, forKey: .downloadURL)
         panel = try c.decodeIfPresent(Bool.self, forKey: .panel) ?? false
+        version = try c.decodeIfPresent(String.self, forKey: .version)
+        category = try c.decodeIfPresent(String.self, forKey: .category)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary)
     }
 
     init(id: String, name: String, iconName: String? = nil, urlScheme: String? = nil,
          appName: String? = nil, permissions: [PluginPermission]? = nil,
          panelHint: String? = nil, minHostVersion: String? = nil,
          downloadURL: URL? = nil, panel: Bool = false,
+         version: String? = nil, category: String? = nil, summary: String? = nil,
          bundlePath: String? = nil, source: Source = .local(appPath: "")) {
         self.id = id
         self.name = name
@@ -96,6 +123,9 @@ struct PluginManifest: Codable, Identifiable, Hashable {
         self.minHostVersion = minHostVersion
         self.downloadURL = downloadURL
         self.panel = panel
+        self.version = version
+        self.category = category
+        self.summary = summary
         self.bundlePath = bundlePath
         self.source = source
     }

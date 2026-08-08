@@ -316,7 +316,10 @@ struct ExpandedView: View {
 
     @ViewBuilder
     var moduleContentView: some View {
-        if let pid = state.selectedPluginPanelID,
+        // 常驻「插件市场」页：作为顶部独立「插件」标签，优先于模块/插件面板
+        if state.showPluginMarket {
+            PluginMarketplaceView()
+        } else if let pid = state.selectedPluginPanelID,
            let panel = pluginPanels.panels[pid] {
             // L3：选中带 panel 的第三方插件时，整个内容区替换为该插件的独立页面，
             // 完全覆盖底层原生模块（不再与音乐/游戏等原生页面叠加），
@@ -374,6 +377,7 @@ struct TabBarView: View {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                                 state.activeModule = mod
                                 state.selectedPluginPanelID = nil
+                                state.showPluginMarket = false
                             }
                             // 点击付费模块时弹出许可证面板
                             if mod.isPremium,
@@ -403,12 +407,43 @@ struct TabBarView: View {
                         .buttonStyle(.plain)
                     }
 
+                    // 常驻「插件市场」标签：始终可见，点开即见市场与已安装列表，
+                    // 不依赖先安装任何插件，是插件系统的统一入口。
+                    let marketSel = state.showPluginMarket
+                    Button(action: {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                            state.showPluginMarket = true
+                            state.selectedPluginPanelID = nil
+                        }
+                    }) {
+                        VStack(spacing: 3) {
+                            ZStack {
+                                Image(systemName: "puzzlepiece.fill")
+                                    .font(.system(size: 15))
+                                // 有可用更新时角标提示
+                                if !PluginMarketplace.shared.updatesAvailable.isEmpty {
+                                    Circle()
+                                        .fill(Color.pink)
+                                        .frame(width: 7, height: 7)
+                                        .offset(x: 7, y: -6)
+                                }
+                            }
+                            Text("插件")
+                                .font(.system(size: 9, weight: .medium))
+                        }
+                        .foregroundColor(marketSel ? .pink : .white.opacity(0.5))
+                        .frame(minWidth: 38, maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+
                     // L3 动态插件模块标签：带 panel 的插件以独立标签出现
                     ForEach(plugins.plugins.filter { $0.panel }, id: \.id) { plugin in
                         let isSel = state.selectedPluginPanelID == plugin.id
                         Button(action: {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                                 state.selectedPluginPanelID = plugin.id
+                                state.showPluginMarket = false
                             }
                         }) {
                             VStack(spacing: 3) {

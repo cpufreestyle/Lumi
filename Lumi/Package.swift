@@ -11,6 +11,9 @@ let package = Package(
         .executableTarget(
             name: "Lumi",
             path: "Sources/Lumi",
+            resources: [
+                .copy("Resources")
+            ],
             linkerSettings: [
                 .linkedFramework("MediaPlayer"),
                 .linkedFramework("EventKit"),

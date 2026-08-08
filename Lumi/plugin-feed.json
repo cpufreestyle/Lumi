@@ -9,9 +9,22 @@
       "appName": "LumiSamplePlugin.app",
       "panelHint": "演示第三方 app 接入灵动岛",
       "minHostVersion": "1.1.9",
-      "downloadURL": "https://github.com/cpufreestyle/Lumi/releases/download/v1.1.9/LumiSamplePlugin.app.zip",
+      "version": "1.0.0",
+      "category": "效率",
+      "summary": "演示 L3 内嵌面板：实时天气 + 按钮回调，由独立 .app 驱动",
+      "downloadURL": "https://github.com/cpufreestyle/Lumi/releases/download/v1.1.14/LumiSamplePlugin.app.zip",
       "permissions": [
         { "type": "network", "reason": "获取天气数据" }
+      ]
+    },
+    {
+      "id": "com.lumi.clipboard-plus",
+      "name": "剪贴板增强（即将上架）",
+      "iconName": "doc.on.clipboard",
+      "category": "工具",
+      "summary": "历史检索、格式转换、跨设备同步 —— 社区源开放后上架",
+      "permissions": [
+        { "type": "accessibility", "reason": "读取剪贴板内容" }
       ]
     }
   ]
