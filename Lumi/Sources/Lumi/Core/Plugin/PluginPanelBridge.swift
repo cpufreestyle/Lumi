@@ -16,12 +16,36 @@ import Combine
 
 // MARK: - 面板数据模型
 
-/// 单行面板内容（键值 / 文本 / 进度）。
-enum PluginPanelLine: Codable, Hashable {
-    case text(String)
-    case kv(key: String, value: String)
-    case progress(Double)        // 0...1
-    case button(title: String)   // 仅展示标签，点击通过 URL Scheme 回插件处理
+/// 单行面板内容（键值 / 文本 / 进度 / 按钮）。
+///
+/// 用「带 `kind` 字段的 struct」而非关联值 enum，使第三方插件写出的 JSON
+/// 直观可读、易对接（见 README L3 章节的示例）。对应 JSON 形态：
+/// ```json
+/// { "kind": "kv",      "key": "天气", "value": "晴 24°C" }
+/// { "kind": "progress","p": 0.5 }
+/// { "kind": "button",  "title": "刷新天气" }
+/// { "kind": "text",    "value": "一行说明" }
+/// ```
+struct PluginPanelLine: Codable, Hashable {
+    enum Kind: String, Codable { case text, kv, progress, button }
+    let kind: Kind
+    var key: String?
+    var value: String?
+    var p: Double?
+    var title: String?
+
+    static func text(_ v: String) -> PluginPanelLine {
+        PluginPanelLine(kind: .text, value: v)
+    }
+    static func kv(_ k: String, _ v: String) -> PluginPanelLine {
+        PluginPanelLine(kind: .kv, key: k, value: v)
+    }
+    static func progress(_ v: Double) -> PluginPanelLine {
+        PluginPanelLine(kind: .progress, p: v)
+    }
+    static func button(_ t: String) -> PluginPanelLine {
+        PluginPanelLine(kind: .button, title: t)
+    }
 }
 
 /// 插件要展示在灵动岛面板里的内容。

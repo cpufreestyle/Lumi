@@ -13,6 +13,14 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     /// 仓库坐标（与发布脚本 release_v1.1.x.sh 中 gh release 对应）
     private let repo = "cpufreestyle/Lumi"
 
+    // MARK: - Mock 更新服务器开关（仅本地验证自动更新用，验证后务必置回 false）
+    /// 置 true 时，所有更新请求改发往本地 mock 服务（默认 http://127.0.0.1:8777），
+    /// 用于在不污染 GitHub 真实仓库的前提下，端到端验证「检查→下载→替换→重启」。
+    private let useMockServer = false
+    private var baseURL: String {
+        useMockServer ? "http://127.0.0.1:8777/\(repo)" : "https://github.com/\(repo)"
+    }
+
     @Published var status: UpdateStatus = .idle
     /// 最新 Release 的版本字符串（不含 v，如 "1.1.5"）
     @Published var latestVersion: String?
@@ -200,7 +208,8 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             openRelease()
             return
         }
-        guard let dl = URL(string: "https://github.com/\(repo)/releases/download/\(tag)/Lumi-\(tag).zip") else {
+        let vTag = "v" + tag
+        guard let dl = URL(string: "\(baseURL)/releases/download/\(vTag)/Lumi-\(vTag).zip") else {
             status = .available
             openRelease()
             return
@@ -229,7 +238,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     private func fetchLatest(silent: Bool, completion: @escaping () -> Void) {
         status = .checking
         // 1) 优先走 HTML 页面（重定向暴露版本号）
-        let htmlURLString = "https://github.com/\(repo)/releases/latest"
+        let htmlURLString = "\(baseURL)/releases/latest"
         guard let htmlURL = URL(string: htmlURLString) else {
             status = .failed("无效的更新地址")
             completion()
@@ -287,16 +296,17 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
     /// 拿到版本号后统一设置状态与下载地址。
     /// 下载地址优先按「已知命名规律」直接拼接：
-    ///   https://github.com/{repo}/releases/download/{tag}/Lumi-{tag}.zip
-    /// 这与发布脚本（release_vX.Y.Z.sh 中 ditto 打出的 Lumi-vX.Y.Z.zip）一一对应，
-    /// 不依赖 GitHub 资源页的 HTML 解析（其资源列表是 JS 懒加载，静态源码里取不到 .zip 链接，
-    /// 旧逻辑会因此永远回退到「打开网页」而无法自动安装）。
+    ///   {baseURL}/releases/download/v{tag}/Lumi-v{tag}.zip
+    /// 注意 GitHub Release 资产路径带 v 前缀（tag=v1.1.9 → .../download/v1.1.9/Lumi-v1.1.9.zip），
+    /// 而 latestVersion 内部用无 v 的 "1.1.9" 做版本比较，故此处需补回 v。
+    /// 这与发布脚本（release_vX.Y.Z.sh 中 ditto 打出的 Lumi-vX.Y.Z.zip）一一对应。
     private func applyLatest(tag: String, htmlURL: URL) {
         let latest = tag
         latestVersion = latest
         releaseURL = htmlURL
-        // 直接拼接压缩包地址（tag 形如 v1.1.9 → Lumi-v1.1.9.zip）
-        if let dl = URL(string: "https://github.com/\(repo)/releases/download/\(tag)/Lumi-\(tag).zip") {
+        let vTag = "v" + tag
+        // 直接拼接压缩包地址（tag 形如 1.1.9 → v1.1.9 / Lumi-v1.1.9.zip）
+        if let dl = URL(string: "\(baseURL)/releases/download/\(vTag)/Lumi-\(vTag).zip") {
             downloadURL = dl
             log("下载地址已拼接：\(dl.absoluteString)")
         }
@@ -317,7 +327,10 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         let matches = regex.matches(in: s, range: NSRange(location: 0, length: ns.length))
         for m in matches {
             let rel = ns.substring(with: m.range(at: 1))
-            if let u = URL(string: "https://github.com" + rel) { return u }
+            // 前缀跟随 baseURL（mock 时为本地服务，真实时为 github.com）
+            let prefix = (URL(string: baseURL)?.scheme ?? "https") + "://" +
+                         (URL(string: baseURL)?.host ?? "github.com")
+            if let u = URL(string: prefix + rel) { return u }
         }
         return nil
     }
@@ -457,7 +470,8 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
             // 生成一次性替换脚本：等旧进程退出后覆盖并重启
             let oldApp = Bundle.main.bundleURL
-            let script = Self.replaceScript(oldApp: oldApp.path, newApp: newApp.path)
+            let oldPID = ProcessInfo.processInfo.processIdentifier
+            let script = Self.replaceScript(oldApp: oldApp.path, newApp: newApp.path, oldPID: oldPID)
             let scriptURL = workDir.appendingPathComponent("install.sh")
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
@@ -465,13 +479,13 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             DispatchQueue.main.async { [weak self] in
                 self?.status = .readyToInstall
             }
-            // 启动替换脚本（异步，不等待），随后终止当前 App
-            let install = Process()
-            install.executableURL = URL(fileURLWithPath: "/bin/bash")
-            install.arguments = [scriptURL.path]
-            try install.run()
-            // 给脚本一点时间启动，再退出
+            // 先终止当前 App，再启动替换脚本；脚本会精确等待本进程（PID）退出后替换
+            // 避免在 App 仍在运行时就 rm -rf 自身导致替换不完整
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let install = Process()
+                install.executableURL = URL(fileURLWithPath: "/bin/bash")
+                install.arguments = [scriptURL.path]
+                try? install.run()
                 NSApplication.shared.terminate(nil)
             }
         } catch {
@@ -491,12 +505,19 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         }
     }
 
-    /// 构造一次性替换脚本：轮询等待旧 App 进程退出后，覆盖并重新打开。
-    private static func replaceScript(oldApp: String, newApp: String) -> String {
+    /// 构造一次性替换脚本：精确等待旧 App 进程（PID）退出后，覆盖并重新打开。
+    private static func replaceScript(oldApp: String, newApp: String, oldPID: Int32) -> String {
         return """
         #!/bin/bash
-        # 等待旧 Lumi 进程退出（最多约 10 秒）
-        for i in $(seq 1 50); do
+        # 精确等待本 App 进程（PID=\(oldPID)）退出，最多约 15 秒
+        for i in $(seq 1 75); do
+            if ! kill -0 \(oldPID) 2>/dev/null; then
+                break
+            fi
+            sleep 0.2
+        done
+        # 兜底：若 PID 仍存活（极端情况），用 pgrep 等同名进程全部退出
+        for i in $(seq 1 25); do
             if ! pgrep -f "\(oldApp)/Contents/MacOS/Lumi" >/dev/null 2>&1; then
                 break
             fi

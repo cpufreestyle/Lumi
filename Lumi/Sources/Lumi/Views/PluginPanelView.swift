@@ -12,12 +12,12 @@ struct PluginPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // 头部：图标 + 标题/副标题
+            // 头部：圆形图标 + 标题/副标题（每个插件为独立页面，需自带身份标识）
             HStack(spacing: 10) {
                 Image(systemName: panel.iconName.isEmpty ? "puzzlepiece" : panel.iconName)
-                    .font(.system(size: 22))
+                    .font(.system(size: 18))
                     .foregroundColor(.white)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 34, height: 34)
                     .background(Circle().fill(
                         LinearGradient(colors: [Color.pink, Color.purple],
                                        startPoint: .topLeading, endPoint: .bottomTrailing)))
@@ -90,29 +90,30 @@ struct PluginPanelView: View {
 
     @ViewBuilder
     private func lineView(_ line: PluginPanelLine) -> some View {
-        switch line {
-        case .text(let s):
-            Text(s)
+        switch line.kind {
+        case .text:
+            Text(line.value ?? "")
                 .font(.system(size: 12))
                 .foregroundColor(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
-        case .kv(let k, let v):
+        case .kv:
             HStack {
-                Text(k).font(.system(size: 12)).foregroundColor(.white.opacity(0.5))
+                Text(line.key ?? "").font(.system(size: 12)).foregroundColor(.white.opacity(0.5))
                 Spacer()
-                Text(v).font(.system(size: 12, weight: .medium)).foregroundColor(.white)
+                Text(line.value ?? "").font(.system(size: 12, weight: .medium)).foregroundColor(.white)
             }
-        case .progress(let p):
-            ProgressView(value: min(1, max(0, p)))
+        case .progress:
+            ProgressView(value: min(1, max(0, line.p ?? 0)))
                 .progressViewStyle(LinearProgressViewStyle(tint: Color.pink))
                 .frame(height: 4)
-        case .button(let title):
+        case .button:
             Button(action: {
                 guard let scheme = pluginScheme, !scheme.isEmpty,
-                      let url = URL(string: "\(scheme)://action?name=\(title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") else { return }
+                      let t = line.title,
+                      let url = URL(string: "\(scheme)://action?name=\(t.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") else { return }
                 NSWorkspace.shared.open(url)
             }) {
-                Text(title)
+                Text(line.title ?? "")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)

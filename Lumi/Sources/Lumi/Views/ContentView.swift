@@ -199,6 +199,8 @@ struct CollapsedView: View {
 struct ExpandedView: View {
     @ObservedObject private var state = AppState.shared
     @ObservedObject private var updater = Updater.shared
+    // 插件面板数据在 PluginPanelBridge.shared 上，需直接观察才能随轮询刷新
+    @ObservedObject private var pluginPanels = PluginPanelBridge.shared
     @State private var dragOffset: CGFloat = 0
 
     // 是否正在展示更新浮层（与 UpdateAvailableBanner.shouldShow 条件保持一致）
@@ -235,15 +237,18 @@ struct ExpandedView: View {
                 UpdateFeedbackBanner()
                     .padding(.top, 8)
 
-                // 模块内容 + 插件区（整体可滚动，插件区始终在模块下方可见）
-                ScrollView(.vertical, showsIndicators: false) {
-                    moduleContentView
-                        .padding(.bottom, 6)
+                // 模块内容占满剩余高度（不整体包 ScrollView，否则音乐/游戏等
+                // 依赖撑满高度的视图在 ScrollView 内会塌缩为 0 高度导致空白）。
+                // 插件区放在模块下方，固定高度上限、内部自行滚动。
+                moduleContentView
+                    .frame(maxHeight: .infinity)
 
+                // 插件区：仅当未进入某个插件独立页面时显示（否则会与该插件页面内容叠加）
+                if state.selectedPluginPanelID == nil {
                     PluginSection()
+                        .frame(maxHeight: 200)
                         .padding(.bottom, 4)
                 }
-                .frame(maxHeight: .infinity)
 
                 // 底部拖拽指示器
                 RoundedRectangle(cornerRadius: 2)
@@ -333,7 +338,14 @@ struct ExpandedView: View {
 
     @ViewBuilder
     var moduleContentView: some View {
-        ZStack {
+        if let pid = state.selectedPluginPanelID,
+           let panel = pluginPanels.panels[pid] {
+            // L3：选中带 panel 的第三方插件时，整个内容区替换为该插件的独立页面，
+            // 完全覆盖底层原生模块（不再与音乐/游戏等原生页面叠加），
+            // 不同插件之间各自独立、互不重叠。
+            PluginPanelView(panel: panel)
+        } else {
+            // 原生模块页面
             switch state.activeModule {
             case .music:
                 MusicExpandedView()
@@ -355,14 +367,8 @@ struct ExpandedView: View {
                 GameExpandedView()
             }
 
-            // L3：选中带 panel 的第三方插件时，其内嵌面板覆盖原生模块内容
-            if let pid = state.selectedPluginPanelID,
-               let panel = state.pluginPanels.panels[pid] {
-                PluginPanelView(panel: panel)
-            }
-
             // 付费功能锁定遮罩（仅原生付费模块）
-            if state.activeModule.isPremium && state.selectedPluginPanelID == nil && !state.canAccessActiveModule {
+            if state.activeModule.isPremium && !state.canAccessActiveModule {
                 PremiumLockOverlay(module: state.activeModule)
             }
         }
@@ -373,14 +379,16 @@ struct ExpandedView: View {
 struct TabBarView: View {
     @ObservedObject private var state = AppState.shared
     @ObservedObject private var license = LicenseManager.shared
+    // 插件列表在 PluginDiscovery.shared 上，AppState 不会转发其变化，
+    // 故此处需直接观察，否则 scan() 更新后标签栏的插件标签不会刷新。
+    @ObservedObject private var plugins = PluginDiscovery.shared
 
     var body: some View {
-        // 外层 VStack 明确纵向排列：标签行在上、分隔线在下。
-        // 此前两者在 body 中并列，被包成无方向约束的 TupleView，
-        // 排列方式取决于父视图，容易导致分隔线错位。
-        VStack(spacing: 0) {
-            // 标签较多时允许横向滚动，避免最右侧「游戏」等标签被右上角
-            // 悬浮的「检查更新 + 隐藏」按钮遮挡而看不到。
+        // 标签栏改为两行布局：
+        // 第一行是模块/插件标签（横向滚动，不再被按钮遮挡）；
+        // 第二行是右上角的工具按钮（右对齐），避免与标签行重叠。
+        VStack(spacing: 6) {
+            // 第一行：标签栏（允许横向滚动）
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
                     ForEach(AppModule.allCases) { mod in
@@ -418,7 +426,7 @@ struct TabBarView: View {
                     }
 
                     // L3 动态插件模块标签：带 panel 的插件以独立标签出现
-                    ForEach(state.plugins.plugins.filter { $0.panel }, id: \.id) { plugin in
+                    ForEach(plugins.plugins.filter { $0.panel }, id: \.id) { plugin in
                         let isSel = state.selectedPluginPanelID == plugin.id
                         Button(action: {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
@@ -443,31 +451,39 @@ struct TabBarView: View {
                 .padding(.trailing, 8)
                 .padding(.top, 4)
             }
-            .overlay(alignment: .topTrailing) {
-                // 隐藏整个界面（鼠标移到顶部可重新出现入口）。
-                // 用 overlay 而非放进 HStack：模块按钮是 maxWidth:.infinity 等分的，
-                // 同行放置会互相挤压导致重叠。
-                HStack(spacing: 6) {
-                    // 检查更新：点击手动触发，有新版本时图标高亮提示
-                    UpdateCheckButton()
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            AppState.shared.islandEnabled = false
-                        }
-                    }) {
-                        Image(systemName: "eye.slash")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
-                            .padding(7)
-                            .background(Circle().fill(Color.white.opacity(0.08)))
+
+            // 第二行：工具按钮（右对齐，不再遮挡标签）
+            HStack(spacing: 6) {
+                Spacer()
+                // 检查更新：点击手动触发，有新版本时图标高亮提示
+                UpdateCheckButton()
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        AppState.shared.islandEnabled = false
                     }
-                    .buttonStyle(.plain)
-                    .help("隐藏界面（鼠标移到顶部可重新出现入口）")
+                }) {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(7)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
                 }
-                .padding(.trailing, 8)
-                // 下移与模块图标视觉居中对齐
-                .padding(.top, 14)
+                .buttonStyle(.plain)
+                .help("隐藏界面（鼠标移到顶部可重新出现入口）")
+                // 退出 Lumi
+                Button(action: {
+                    NSApplication.shared.terminate(nil)
+                }) {
+                    Image(systemName: "power")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.red.opacity(0.85))
+                        .padding(7)
+                        .background(Circle().fill(Color.red.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .help("退出 Lumi")
             }
+            .padding(.horizontal, 8)
 
             // 底部分隔线
             Rectangle()

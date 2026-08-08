@@ -66,6 +66,9 @@ final class PluginDiscovery: ObservableObject {
         found.sort { $0.resolvedName.localizedCaseInsensitiveCompare($1.resolvedName) == .orderedAscending }
         self.plugins = found
 
+        // 诊断：打印扫描到的插件（临时，便于排查标签栏不显示插件的问题）
+        NSLog("[Lumi][PluginDiscovery] 扫描到 \(found.count) 个插件：\(found.map { $0.id + (($0.panel) ? "(panel)" : "") }.joined(separator: ", "))")
+
         // L3：把带 panel 标志的插件交给 PluginPanelBridge 轮询其面板数据
         let panelIDs = found.filter { $0.panel }.map { $0.id }
         PluginPanelBridge.shared.watch(panelIDs)
