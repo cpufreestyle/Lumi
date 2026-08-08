@@ -2,39 +2,75 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Lumi (build & run)",
-      "type": "lldb",
-      "request": "launch",
-      "preLaunchTask": "swift-build-lumi",
-      "program": "${workspaceFolder}/Lumi/.build/debug/Lumi",
-      "args": [],
-      "cwd": "${workspaceFolder}/Lumi",
-      "env": {
-        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
-      },
-      "stopOnEntry": false
+        "name": "Lumi (build & run)",
+        "type": "lldb",
+        "request": "launch",
+        "preLaunchTask": "swift-build-lumi",
+        "program": "${workspaceFolder}/Lumi/.build/debug/Lumi",
+        "args": [],
+        "cwd": "${workspaceFolder}/Lumi",
+        "env": {
+            "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
+        },
+        "stopOnEntry": false
     },
     {
-      "name": "Lumi (.app build & run)",
-      "type": "lldb",
-      "request": "launch",
-      "preLaunchTask": "swift-build-lumi",
-      "program": "${workspaceFolder}/Lumi/.build/Lumi.app/Contents/MacOS/Lumi",
-      "args": [],
-      "cwd": "${workspaceFolder}/Lumi",
-      "env": {
-        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
-      },
-      "stopOnEntry": false
+        "name": "Lumi (.app build & run)",
+        "type": "lldb",
+        "request": "launch",
+        "preLaunchTask": "swift-build-lumi",
+        "program": "${workspaceFolder}/Lumi/.build/Lumi.app/Contents/MacOS/Lumi",
+        "args": [],
+        "cwd": "${workspaceFolder}/Lumi",
+        "env": {
+            "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
+        },
+        "stopOnEntry": false
     },
     {
-      "name": "Lumi (attach & wait)",
-      "type": "lldb",
-      "request": "attach",
-      "program": "${workspaceFolder}/Lumi/.build/Lumi.app/Contents/MacOS/Lumi",
-      "processCreateCommands": [
-        "process attach --name Lumi --waitfor"
-      ]
+        "name": "Lumi (attach & wait)",
+        "type": "lldb",
+        "request": "attach",
+        "program": "${workspaceFolder}/Lumi/.build/Lumi.app/Contents/MacOS/Lumi",
+        "processCreateCommands": [
+            "process attach --name Lumi --waitfor"
+        ]
+    },
+    {
+        "type": "lldb",
+        "request": "launch",
+        "args": [],
+        "cwd": "${workspaceFolder:Lumi}/Lumi",
+        "name": "Debug Lumi (Lumi)",
+        "program": "${workspaceFolder:Lumi}/Lumi/.build/debug/Lumi",
+        "preLaunchTask": "swift: Build Debug Lumi (Lumi)"
+    },
+    {
+        "type": "lldb",
+        "request": "launch",
+        "args": [],
+        "cwd": "${workspaceFolder:Lumi}/Lumi",
+        "name": "Release Lumi (Lumi)",
+        "program": "${workspaceFolder:Lumi}/Lumi/.build/release/Lumi",
+        "preLaunchTask": "swift: Build Release Lumi (Lumi)"
+    },
+    {
+        "type": "lldb",
+        "request": "launch",
+        "args": [],
+        "cwd": "${workspaceFolder:Lumi}/Lumi",
+        "name": "Debug license-tool (Lumi)",
+        "program": "${workspaceFolder:Lumi}/Lumi/.build/debug/license-tool",
+        "preLaunchTask": "swift: Build Debug license-tool (Lumi)"
+    },
+    {
+        "type": "lldb",
+        "request": "launch",
+        "args": [],
+        "cwd": "${workspaceFolder:Lumi}/Lumi",
+        "name": "Release license-tool (Lumi)",
+        "program": "${workspaceFolder:Lumi}/Lumi/.build/release/license-tool",
+        "preLaunchTask": "swift: Build Release license-tool (Lumi)"
     }
-  ]
+]
 }

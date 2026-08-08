@@ -11,6 +11,7 @@ enum AppModule: String, CaseIterable, Identifiable {
     case claudeCode = "Claude"
     case codex = "Codex"
     case videoDownload = "下载"
+    case game = "游戏"
 
     var id: String { rawValue }
 
@@ -24,6 +25,7 @@ enum AppModule: String, CaseIterable, Identifiable {
         case .claudeCode:  return "brain.head.profile"
         case .codex:       return "wand.and.stars"
         case .videoDownload: return "arrow.down.to.line"
+        case .game:        return "gamecontroller.fill"
         }
     }
 
@@ -37,6 +39,7 @@ enum AppModule: String, CaseIterable, Identifiable {
         case .claudeCode:  return "claude"
         case .codex:       return "codex"
         case .videoDownload: return "dl"
+        case .game:        return "game"
         }
     }
 

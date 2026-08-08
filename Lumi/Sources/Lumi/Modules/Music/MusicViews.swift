@@ -100,21 +100,8 @@ struct MusicBriefContent: View {
                         .lineLimit(1)
                 }
             }
-
-            // 固定小胶囊按钮：锁定后胶囊常驻显示，不随鼠标离开热区收起，
-            // 方便稳定阅读歌词。
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    AppState.shared.islandPinned.toggle()
-                }
-            } label: {
-                Image(systemName: state.islandPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(state.islandPinned ? .yellow : .white.opacity(0.5))
-                    .frame(width: 16, height: 16)
-            }
-            .buttonStyle(.plain)
-            .help(state.islandPinned ? "取消固定小胶囊" : "固定小胶囊（常驻显示）")
+            // 让文本区占满中间空间，把右侧的固定按钮自然推到最右边
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -122,15 +109,43 @@ struct MusicBriefContent: View {
 // MARK: - 音乐模块：展开态完整视图
 struct MusicExpandedView: View {
     @ObservedObject private var music = MusicController.shared
+    /// 卡片实际尺寸（随用户缩放变化）。据此让字幕字号与歌词区高度自适应卡片大小。
+    @State private var viewSize: CGSize = CGSize(width: 360, height: 480)
+
+    // 歌词字号随卡片宽度线性缩放：基准 360 宽 → 17pt，并夹紧在合理区间，
+    // 卡片放大时字变大、缩小时字变小，始终与卡片尺寸协调。
+    private var lyricBaseSize: CGFloat {
+        let w = max(280, min(viewSize.width, 520))
+        return min(22, max(15, 17 * (w / 360)))
+    }
+    private var lyricActiveSize: CGFloat { lyricBaseSize + 2 }
+    private var translationSize: CGFloat {
+        let w = max(280, min(viewSize.width, 520))
+        return min(18, max(13, 15 * (w / 360)))
+    }
+    // 歌词区高度随卡片高度比例自适应（卡片越高，可展示的歌词越多）。
+    // 已移除顶部音频频谱可视化，把原频谱占用的空间（约 40pt）补偿给歌词区，
+    // 让歌词区更舒展、不再留白。
+    private var lyricAreaHeight: CGFloat {
+        let h = max(360, min(viewSize.height, 720))
+        // 360→140，720→280 线性映射（在原基础上 +40，补回频谱空间）
+        return min(300, max(120, 140 + (h - 360) / (720 - 360) * (280 - 140)))
+    }
+    // 专辑封面随卡片宽度等比缩放：基准 360 宽 → 160，夹在 120–240。
+    private var artworkSize: CGFloat {
+        let w = max(280, min(viewSize.width, 520))
+        return min(240, max(120, 160 * (w / 360)))
+    }
 
     var body: some View {
-        // 整体包一层 ScrollView：面板高度上限(456)内内容超出时整块滚动，
-        // 避免底部歌词区被 maxHeight 裁切（尤其播放中带频谱时总高超上限）。
-        ScrollView {
-        VStack(spacing: 0) {
-            // 专辑封面
-            albumArtworkSection
-                .padding(.top, 16)
+        // 整体包一层 ScrollView：面板高度上限内内容超出时整块滚动，
+        // 避免底部歌词区被裁切（尤其播放中带频谱时总高超上限）。
+        GeometryReader { geo in
+            ScrollView {
+            VStack(spacing: 0) {
+                // 专辑封面
+                albumArtworkSection
+                    .padding(.top, 16)
 
             // 歌曲信息
             VStack(spacing: 2) {
@@ -159,31 +174,26 @@ struct MusicExpandedView: View {
             // 音量控制
             volumeSection
 
-            // 音频可视化频谱
-            if music.isPlaying {
-                AudioVisualizer()
-                    .frame(height: 28)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 12)
-            }
-
             // 歌词
             lyricsSection
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
                 .padding(.bottom, 16)
-        }
+            }
+            .onChange(of: geo.size) { nv in viewSize = nv }
+            }
         }
     }
 
     // MARK: 专辑封面
     var albumArtworkSection: some View {
         Group {
+            let size = artworkSize
             if let artwork = music.artwork {
                 Image(nsImage: artwork)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 160, height: 160)
+                    .frame(width: size, height: size)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
             } else {
@@ -195,10 +205,10 @@ struct MusicExpandedView: View {
                             endPoint: .bottomTrailing
                         )
                     )
-                    .frame(width: 160, height: 160)
+                    .frame(width: size, height: size)
                     .overlay(
                         Image(systemName: "music.note")
-                            .font(.system(size: 50))
+                            .font(.system(size: size * 0.31))
                             .foregroundColor(.white.opacity(0.5))
                     )
                     .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
@@ -388,7 +398,7 @@ struct MusicExpandedView: View {
 
                     if music.lyrics.isEmpty {
                         Text("当前歌曲暂无歌词")
-                            .font(.system(size: 12))
+                            .font(.system(size: lyricBaseSize))
                             .foregroundColor(.white.opacity(0.4))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else if !music.syncedLines.isEmpty {
@@ -410,26 +420,29 @@ struct MusicExpandedView: View {
                         }
                         LyricsSyncView(lines: music.syncedLines,
                                        currentTime: music.currentTime,
-                                       offset: music.lyricsOffset) { delta in
+                                       offset: music.lyricsOffset,
+                                       baseSize: lyricBaseSize,
+                                       activeSize: lyricActiveSize,
+                                       translationSize: translationSize) { delta in
                             // 一键对齐：用户点击「当前在唱」的那行，反推 offset 并夹在 ±10s
                             var v = delta
                             v = max(-10, min(10, v))
                             v = round(v / 0.5) * 0.5
                             music.lyricsOffset = v
                         }
-                            .frame(maxHeight: 140)
+                            .frame(maxHeight: lyricAreaHeight)
                     } else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(music.lyrics)
-                                    .font(.system(size: 13))
+                                    .font(.system(size: lyricBaseSize))
                                     .foregroundColor(.white.opacity(0.78))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .lineSpacing(4)
                                 if music.bilingualMode != .off,
                                    !music.lyricsTranslation.isEmpty {
                                     Text(music.lyricsTranslation)
-                                        .font(.system(size: 11.5))
+                                        .font(.system(size: translationSize))
                                         .foregroundColor(.white.opacity(0.45))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .lineSpacing(3)
@@ -437,7 +450,7 @@ struct MusicExpandedView: View {
                             }
                             .padding(.vertical, 4)
                         }
-                        .frame(maxHeight: 96)
+                        .frame(maxHeight: lyricAreaHeight)
                     }
                 }
             } else {
@@ -499,6 +512,10 @@ struct LyricsSyncView: View {
     let currentTime: TimeInterval
     /// 时间轴校准偏移（秒）。正值表示歌词时间轴比实际播放快，需要把匹配基准往后推。
     var offset: TimeInterval = 0
+    /// 字号（由卡片大小自适应传入）：普通行 / 当前高亮行 / 翻译行
+    var baseSize: CGFloat = 13
+    var activeSize: CGFloat = 14
+    var translationSize: CGFloat = 11
     /// 点击某行即「一键对齐」：该行此刻应在唱，自动算出 offset = 行时间 - 当前进度。
     var onAlign: ((TimeInterval) -> Void)? = nil
 
@@ -517,11 +534,11 @@ struct LyricsSyncView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(line.text)
-                                .font(.system(size: i == activeIndex ? 14 : 13,
+                                .font(.system(size: i == activeIndex ? activeSize : baseSize,
                                               weight: i == activeIndex ? .semibold : .regular))
                                 .foregroundColor(
                                     i == activeIndex ? .white : .white.opacity(0.5)
@@ -530,7 +547,7 @@ struct LyricsSyncView: View {
                                 .lineSpacing(4)
                             if let tr = line.translation, !tr.isEmpty {
                                 Text(tr)
-                                    .font(.system(size: i == activeIndex ? 11.5 : 11,
+                                    .font(.system(size: translationSize,
                                                   weight: .regular))
                                     .foregroundColor(.white.opacity(i == activeIndex ? 0.6 : 0.38))
                                     .frame(maxWidth: .infinity, alignment: .leading)

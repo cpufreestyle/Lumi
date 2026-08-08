@@ -201,6 +201,16 @@ final class IslandWindowController: NSObject {
             }
             .store(in: &cancellables)
 
+        // 展开态下切换模块时重新计算窗口尺寸：游戏模块自动放大到更适合直接玩的
+        // 尺寸，切回其他模块恢复默认；用户手动缩放过的尺寸（userSize）始终优先。
+        AppState.shared.$activeModule
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self = self, AppState.shared.isExpanded else { return }
+                self.updateWindowFrame(expanded: true)
+            }
+            .store(in: &cancellables)
+
         // 播放状态变化：播放时自动切到音乐模块，胶囊内容随之刷新
         MusicController.shared.$playbackState
             .receive(on: RunLoop.main)
@@ -225,6 +235,15 @@ final class IslandWindowController: NSObject {
                     self?.wasInZone = true
                     self?.hideIsland()
                 }
+            }
+            .store(in: &cancellables)
+
+        // 更新浮层显隐变化：展开态下需要重排窗口高度（给浮层腾出独立空间）
+        Updater.shared.$status
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.updateWindowFrame(expanded: AppState.shared.isExpanded)
             }
             .store(in: &cancellables)
     }
@@ -273,8 +292,6 @@ final class IslandWindowController: NSObject {
     /// 判断鼠标是否进入"动态岛"热区（顶部中央横带），据此弹出/收起
     private func evaluateHotZone() {
         guard !AppState.shared.isExpanded else { return }
-        // 锁定常驻：不根据热区变化收起/弹出，保持显示
-        guard !AppState.shared.islandPinned else { return }
         let mouse = NSEvent.mouseLocation
         guard let screen = builtInScreen else { return }
 
@@ -282,7 +299,7 @@ final class IslandWindowController: NSObject {
         // 立即收起，避免在其他屏顶部误触发面板。
         guard screen.frame.contains(mouse) else {
             wasInZone = false
-            if AppState.shared.islandEnabled { hideIsland() }
+            if AppState.shared.islandEnabled, !AppState.shared.islandPinned { hideIsland() }
             return
         }
 
@@ -297,6 +314,16 @@ final class IslandWindowController: NSObject {
                 showIsland()
             }
             wasInZone = inZone
+            return
+        }
+
+        // 锁定常驻：鼠标离开热区不自动收起，但进入热区（从其他区域移回）仍自动显示
+        guard !AppState.shared.islandPinned else {
+            wasInZone = inZone
+            if inZone {
+                hideTimer?.invalidate(); hideTimer = nil
+                if !window.isVisible { showIsland() }
+            }
             return
         }
 
@@ -325,7 +352,9 @@ final class IslandWindowController: NSObject {
     private func showIsland() {
         guard let panel = window else { return }
         updateWindowFrame(expanded: false)
-        if !panel.isVisible { panel.orderFront(nil) }
+        // orderFrontRegardless 不受应用激活状态/窗口层级限制，确保一定能显示
+        panel.orderFrontRegardless()
+        panel.makeKey()
     }
 
     private func hideIsland() {
@@ -336,11 +365,27 @@ final class IslandWindowController: NSObject {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = item.button {
-            // 优先用应用图标，缺失时回退到文字
-            if let img = NSImage(named: "AppIcon") {
-                img.size = NSSize(width: 18, height: 18)
+            // 模板图（template）+ 单一来源，避免 image/title 互相重叠
+            // 优先级：SF Symbol（月亮）> bundle AppIcon > emoji 回退
+            // 用 SF Symbol 永远有稳定清晰的月牙图标，不再出现 "dl" 这种 emoji 被裁切的情况
+            let symbol = NSImage(
+                systemSymbolName: "moon.stars.fill",
+                accessibilityDescription: "Lumi"
+            )
+            if let symbol = symbol {
+                symbol.isTemplate = true
+                symbol.size = NSSize(width: 16, height: 16)
+                btn.image = symbol
+                btn.imagePosition = .imageOnly
+                btn.title = ""
+            } else if let img = NSImage(named: "AppIcon") {
+                img.size = NSSize(width: 16, height: 16)
                 btn.image = img
+                btn.imagePosition = .imageOnly
+                btn.title = ""
             } else {
+                btn.image = nil
+                btn.imagePosition = .noImage
                 btn.title = "🌙"
             }
             btn.toolTip = "Lumi 动态岛"
@@ -396,6 +441,20 @@ final class IslandWindowController: NSObject {
         }
     }
 
+    // 是否正在展示更新浮层（与 UpdateAvailableBanner.shouldShow 条件保持一致）
+    private var updaterBannerVisible: Bool {
+        switch Updater.shared.status {
+        case .available, .downloading, .readyToInstall, .failed:
+            if let latest = Updater.shared.latestVersion,
+               (latest == Updater.shared.ignoredVersion || latest == Updater.shared.skippedVersion) {
+                return false
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
     func updateWindowFrame(expanded: Bool) {
         // 拖拽缩放进行中：保持当前窗口 frame，不要用 userSize 重置，
         // 否则手柄拖拽会被 isHovering 触发的本函数立即覆盖掉。
@@ -406,12 +465,20 @@ final class IslandWindowController: NSObject {
         let screenFrame = screen.visibleFrame
 
         let peeking = AppState.shared.isHovering && !expanded
-        // 展开态尺寸优先用用户手动调整后的尺寸，否则默认 360×480
-        let w: CGFloat = expanded ? (userSize?.width ?? 360) : 320
+        // 游戏模块需要更大面板才能直接玩 H5 小游戏，使用专属默认尺寸 480×600；
+        // 其他模块维持默认 360×480。用户手动缩放后一律以 userSize 为准。
+        let isGame = AppState.shared.activeModule == .game
+        let defaultW: CGFloat = isGame ? 480 : 360
+        let defaultH: CGFloat = isGame ? 600 : 480
+        // 展开态尺寸优先用用户手动调整后的尺寸，否则用模块专属默认值
+        let w: CGFloat = expanded ? (userSize?.width ?? defaultW) : 320
+        // 更新可用浮层出现时，给展开面板额外增加高度，把浮层放在顶部独立区域，
+        // 避免它与下方模块内容（如下载卡片）重叠。
+        let updateBannerExtra: CGFloat = (expanded && updaterBannerVisible) ? 96 : 0
         // 窗口高度精确等于内容高度，避免窗口比圆角内容大而露出多余的透明外框：
         // 收缩态 CollapsedView 高 42；peek 态 = 预览区 + 胶囊 42 + 底部 6；展开态 480。
         // 收缩/peek 态高度固定，不受手动调整影响。
-        let h: CGFloat = expanded ? (userSize?.height ?? 480) : (peeking ? 132 : 42)
+        let h: CGFloat = expanded ? ((userSize?.height ?? defaultH) + updateBannerExtra) : (peeking ? 132 : 42)
         // 居中于目标屏幕顶部，紧贴菜单栏下方，避开刘海
         let x = screenFrame.midX - w / 2
         let y = screenFrame.maxY - h - 6

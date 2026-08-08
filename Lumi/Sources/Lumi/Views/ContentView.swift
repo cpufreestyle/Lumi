@@ -63,6 +63,7 @@ struct PeekPreviewContent: View {
             case .claudeCode:     Text("AI 编程助手 · 问答/解释/调试").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
             case .codex:          Text("代码解释 · 优化 · Bug 查找 · 测试生成").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
             case .videoDownload:  Text("支持 1800+ 站点 · MP4/MP3 下载").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
+            case .game:           Text("TapTap H5 小游戏").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
             }
             Spacer(minLength: 0)
         }
@@ -111,10 +112,22 @@ struct CollapsedView: View {
                 .padding(.horizontal, 8)
 
             Spacer()
+                .padding(.trailing, 6)
 
-            // 右侧：模块切换小点
-            moduleDotsView
-                .padding(.trailing, 14)
+            // 右侧：固定小胶囊按钮（最右端，不挤占歌词/信息区域）
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    AppState.shared.islandPinned.toggle()
+                }
+            } label: {
+                Image(systemName: state.islandPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(state.islandPinned ? .yellow : .white.opacity(0.5))
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.plain)
+            .help(state.islandPinned ? "取消固定小胶囊" : "固定小胶囊（常驻显示）")
+            .padding(.trailing, 14)
         }
         .frame(height: 42)
         .background(
@@ -175,38 +188,52 @@ struct CollapsedView: View {
             Text("✨ 代码解释 · 优化 · 补全").font(.system(size: 12)).foregroundColor(.white.opacity(0.7))
         case .videoDownload:
             Text("⬇ 视频下载 MP4/MP3").font(.system(size: 12)).foregroundColor(.white.opacity(0.7))
+        case .game:
+            GameBriefView()
         }
     }
 
-    var moduleDotsView: some View {
-        HStack(spacing: 5) {
-            ForEach(AppModule.allCases) { mod in
-                Circle()
-                    .fill(
-                        state.activeModule == mod
-                            ? Color.pink
-                            : Color.white.opacity(0.25)
-                    )
-                    .frame(
-                        width: state.activeModule == mod ? 8 : 5,
-                        height: state.activeModule == mod ? 8 : 5
-                    )
-                    .animation(.spring(), value: state.activeModule)
-            }
-        }
-    }
 }
 
 // MARK: - 展开态：完整面板
 struct ExpandedView: View {
     @ObservedObject private var state = AppState.shared
+    @ObservedObject private var updater = Updater.shared
     @State private var dragOffset: CGFloat = 0
+
+    // 是否正在展示更新浮层（与 UpdateAvailableBanner.shouldShow 条件保持一致）
+    private var showUpdateBanner: Bool {
+        switch updater.status {
+        case .available, .downloading, .readyToInstall, .failed:
+            if let latest = updater.latestVersion,
+               (latest == updater.ignoredVersion || latest == updater.skippedVersion) {
+                return false
+            }
+            return true
+        default:
+            return false
+        }
+    }
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
                 // 顶部标签栏
                 TabBarView()
+
+                // 更新提示浮层：作为正常布局行（参与流式排版），
+                // 自然占据顶部空间，下方模块内容不再与之重叠。
+                if showUpdateBanner {
+                    UpdateAvailableBanner()
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(.easeInOut(duration: 0.25), value: showUpdateBanner)
+                }
+
+                // 手动检查反馈条（已是最新 / 失败原因）：与 showUpdateBanner 解耦，
+                // 即使 status == .upToDate（图标变绿）也能看到明确提示。
+                UpdateFeedbackBanner()
+                    .padding(.top, 8)
 
                 // 模块内容
                 moduleContentView
@@ -256,9 +283,6 @@ struct ExpandedView: View {
             if state.showLicensePanel {
                 licensePanelOverlay
             }
-
-            // 更新可用提示浮层（发现新版本时弹出）
-            UpdateAvailableBanner()
         }
         .offset(y: dragOffset)
         .animation(.easeInOut(duration: 0.25), value: state.showLicensePanel)
@@ -321,6 +345,8 @@ struct ExpandedView: View {
                 CodexExpandedView()
             case .videoDownload:
                 VideoDownloadExpandedView()
+            case .game:
+                GameExpandedView()
             }
 
             // 付费功能锁定遮罩
@@ -341,44 +367,47 @@ struct TabBarView: View {
         // 此前两者在 body 中并列，被包成无方向约束的 TupleView，
         // 排列方式取决于父视图，容易导致分隔线错位。
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                ForEach(AppModule.allCases) { mod in
-                    Button(action: {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
-                            state.activeModule = mod
-                        }
-                        // 点击付费模块时弹出许可证面板
-                        if mod.isPremium,
-                           let feature = mod.premiumFeature,
-                           !license.isUnlocked(feature) {
-                            state.showLicensePanel = true
-                        }
-                    }) {
-                        VStack(spacing: 3) {
-                            ZStack {
-                                Image(systemName: mod.icon)
-                                    .font(.system(size: 15))
-                                if mod.isPremium, let feature = mod.premiumFeature, !license.isUnlocked(feature) {
-                                    Image(systemName: "lock.fill")
-                                        .font(.system(size: 7))
-                                        .foregroundColor(.orange)
-                                        .offset(x: 7, y: -6)
-                                }
+            // 标签较多时允许横向滚动，避免最右侧「游戏」等标签被右上角
+            // 悬浮的「检查更新 + 隐藏」按钮遮挡而看不到。
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(AppModule.allCases) { mod in
+                        Button(action: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                                state.activeModule = mod
                             }
-                            Text(mod.shortName)
-                                .font(.system(size: 9, weight: .medium))
+                            // 点击付费模块时弹出许可证面板
+                            if mod.isPremium,
+                               let feature = mod.premiumFeature,
+                               !license.isUnlocked(feature) {
+                                state.showLicensePanel = true
+                            }
+                        }) {
+                            VStack(spacing: 3) {
+                                ZStack {
+                                    Image(systemName: mod.icon)
+                                        .font(.system(size: 15))
+                                    if mod.isPremium, let feature = mod.premiumFeature, !license.isUnlocked(feature) {
+                                        Image(systemName: "lock.fill")
+                                            .font(.system(size: 7))
+                                            .foregroundColor(.orange)
+                                            .offset(x: 7, y: -6)
+                                    }
+                                }
+                                Text(mod.shortName)
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                            .foregroundColor(state.activeModule == mod ? .pink : .white.opacity(0.5))
+                            .frame(minWidth: 38, maxWidth: .infinity)
+                            .padding(.vertical, 10)
                         }
-                        .foregroundColor(state.activeModule == mod ? .pink : .white.opacity(0.5))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.leading, 12)
+                .padding(.trailing, 8)
+                .padding(.top, 4)
             }
-            // 为右上角悬浮的隐藏按钮预留宽度，避免最后一个模块（下载）与其重叠
-            .padding(.trailing, 34)
-            .padding(.leading, 12)
-            .padding(.top, 4)
             .overlay(alignment: .topTrailing) {
                 // 隐藏整个界面（鼠标移到顶部可重新出现入口）。
                 // 用 overlay 而非放进 HStack：模块按钮是 maxWidth:.infinity 等分的，
@@ -996,7 +1025,7 @@ struct UpdateCheckButton: View {
         }) {
             Image(systemName: iconName)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(accentColor)
+                .foregroundColor(accentTint)
                 .padding(7)
                 .background(Circle().fill(Color.white.opacity(0.08)))
                 .overlay(
@@ -1023,7 +1052,7 @@ struct UpdateCheckButton: View {
         }
     }
 
-    private var accentColor: Color {
+    private var accentTint: Color {
         switch updater.status {
         case .available:  return .green
         case .failed:     return .orange
@@ -1043,18 +1072,70 @@ struct UpdateCheckButton: View {
     }
 }
 
+// MARK: - 手动检查反馈条（已是最新 / 失败原因，几秒后自动消失）
+struct UpdateFeedbackBanner: View {
+    @ObservedObject private var updater = Updater.shared
+
+    var body: some View {
+        // 仅当存在手动检查反馈时显示；与 showUpdateBanner 解耦，
+        // 即使 status == .upToDate（图标变绿）也能看到明确提示。
+        if let feedback = updater.manualCheckFeedback {
+            HStack(spacing: 8) {
+                Image(systemName: feedbackIcon)
+                    .font(.system(size: 14))
+                    .foregroundColor(feedbackColor)
+                Text(feedback)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                Spacer()
+                Button(action: { updater.manualCheckFeedback = nil }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(5)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(feedbackColor.opacity(0.3), lineWidth: 0.5))
+            )
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.easeInOut(duration: 0.25), value: updater.manualCheckFeedback)
+        }
+    }
+
+    private var feedbackIcon: String {
+        if (updater.manualCheckFeedback ?? "").contains("失败") { return "exclamationmark.circle" }
+        if (updater.manualCheckFeedback ?? "").contains("新版本") { return "arrow.down.circle.fill" }
+        return "checkmark.circle"
+    }
+    private var feedbackColor: Color {
+        if (updater.manualCheckFeedback ?? "").contains("失败") { return .orange }
+        if (updater.manualCheckFeedback ?? "").contains("新版本") { return .green }
+        return .green
+    }
+}
+
 // MARK: - 新版本可用浮层（发现更新时提示）
 struct UpdateAvailableBanner: View {
     @ObservedObject private var updater = Updater.shared
 
     var body: some View {
-        // 仅在发现新版本且未被忽略/稍后时显示；用 overlay 固定在顶部，不拦截下方交互
+        // 仅在有新版本 / 下载中 / 失败等需要常驻提示时渲染原浮层；
+        // 手动检查的短暂反馈（已是最新等）由独立的 UpdateFeedbackBanner 负责。
         if shouldShow {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                // 头部：图标 + 标题/副标题 + 关闭按钮（始终右上角）
                 HStack(spacing: 10) {
                     Image(systemName: iconName)
                         .font(.system(size: 18))
-                        .foregroundColor(.green)
+                        .foregroundColor(accentTint)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(titleText)
                             .font(.system(size: 12, weight: .semibold))
@@ -1064,22 +1145,95 @@ struct UpdateAvailableBanner: View {
                             .foregroundColor(.white.opacity(0.5))
                     }
                     Spacer()
-                    trailingControls
+                    Button(action: { updater.dismiss() }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
+                            .padding(6)
+                    }
+                    .buttonStyle(.plain)
+                    .help("关闭提示")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white.opacity(0.06))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.green.opacity(0.3), lineWidth: 0.5))
-                )
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
+                // 操作按钮行（独立一行，避免与标题挤压重叠）
+                actionRow
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .allowsHitTesting(true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(accentTint.opacity(0.3), lineWidth: 0.5))
+            )
+            .padding(.horizontal, 12)
             .transition(.move(edge: .top).combined(with: .opacity))
             .animation(.easeInOut(duration: 0.25), value: updater.status)
+        }
+    }
+
+    /// 操作按钮独立成一行（HStack 自适应宽度，防止与标题行重叠）
+    @ViewBuilder
+    private var actionRow: some View {
+        switch updater.status {
+        case .available:
+            HStack(spacing: 8) {
+                Button(action: { updater.downloadAndInstall() }) {
+                    Text("更新并重启")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing))
+                        .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .help("自动下载并安装此更新")
+                Button(action: { updater.ignoreCurrent() }) {
+                    Text("忽略")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.2)))
+                }
+                .buttonStyle(.plain)
+                .help("不再提示此版本")
+            }
+        case .downloading:
+            HStack(spacing: 8) {
+                Text("下载中…")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.6))
+                Spacer()
+                Button(action: { updater.cancelDownload() }) {
+                    Text("取消")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.2)))
+                }
+                .buttonStyle(.plain)
+                .help("取消下载")
+            }
+        case .failed:
+            HStack(spacing: 8) {
+                Button(action: { updater.openRelease() }) {
+                    Text("前往下载")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing))
+                        .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .help("打开下载页面")
+            }
+        default:
+            EmptyView()
         }
     }
 
@@ -1104,6 +1258,18 @@ struct UpdateAvailableBanner: View {
         return "arrow.down.circle.fill"
     }
 
+    /// 手动检查反馈的图标（按文字内容判断成功/失败）
+    private var feedbackIcon: String {
+        if (updater.manualCheckFeedback ?? "").contains("失败") { return "exclamationmark.circle" }
+        if (updater.manualCheckFeedback ?? "").contains("新版本") { return "arrow.down.circle.fill" }
+        return "checkmark.circle"
+    }
+    private var feedbackColor: Color {
+        if (updater.manualCheckFeedback ?? "").contains("失败") { return .orange }
+        if (updater.manualCheckFeedback ?? "").contains("新版本") { return .green }
+        return .green
+    }
+
     private var titleText: String {
         switch updater.status {
         case .available:      return "新版本 v\(updater.latestVersion ?? "") 可用"
@@ -1122,80 +1288,13 @@ struct UpdateAvailableBanner: View {
         }
     }
 
-    @ViewBuilder
-    private var trailingControls: some View {
+    private var accentTint: Color {
         switch updater.status {
-        case .available:
-            // 主操作：自动下载并安装（无需手动下载）
-            Button(action: { updater.downloadAndInstall() }) {
-                Text("更新并重启")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing)
-                    )
-                    .cornerRadius(8)
-            }
-            .buttonStyle(.plain)
-            .help("自动下载并安装此更新")
-            // 次级：忽略此版本（永久不再提示）
-            Button(action: { updater.ignoreCurrent() }) {
-                Image(systemName: "bell.slash")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(6)
-            }
-            .buttonStyle(.plain)
-            .help("不再提示此版本")
-            // 取消：本次稍后
-            Button(action: { updater.skipCurrent() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(6)
-            }
-            .buttonStyle(.plain)
-            .help("稍后（本次不更新）")
-        case .downloading:
-            // 下载中：取消
-            Button(action: { updater.cancelDownload() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(6)
-            }
-            .buttonStyle(.plain)
-            .help("取消下载")
-        case .readyToInstall:
-            // 即将重启，无需操作
-            EmptyView()
-        case .failed:
-            // 失败：回退到网页手动下载
-            Button(action: { updater.openRelease() }) {
-                Text("前往下载")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing)
-                    )
-                    .cornerRadius(8)
-            }
-            .buttonStyle(.plain)
-            .help("打开下载页面")
-            Button(action: { updater.skipCurrent() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(6)
-            }
-            .buttonStyle(.plain)
-            .help("稍后")
-        default:
-            EmptyView()
+        case .available:  return .green
+        case .failed:     return .orange
+        case .upToDate:   return .white.opacity(0.5)
+        default:          return .white.opacity(0.5)
         }
     }
+
 }
