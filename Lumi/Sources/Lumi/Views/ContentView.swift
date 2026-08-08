@@ -1048,44 +1048,23 @@ struct UpdateAvailableBanner: View {
     @ObservedObject private var updater = Updater.shared
 
     var body: some View {
-        // 仅在发现新版本且未忽略时显示；用 overlay 固定在顶部，不撑满、不拦截下方交互
-        if case .available = updater.status,
-           let latest = updater.latestVersion,
-           latest != updater.ignoredVersion {
+        // 仅在发现新版本且未被忽略/稍后时显示；用 overlay 固定在顶部，不拦截下方交互
+        if shouldShow {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.circle.fill")
+                    Image(systemName: iconName)
                         .font(.system(size: 18))
                         .foregroundColor(.green)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("新版本 v\(latest) 可用")
+                        Text(titleText)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(.white)
-                        Text("当前 v\(updater.currentVersion)")
+                        Text(subtitleText)
                             .font(.system(size: 10))
                             .foregroundColor(.white.opacity(0.5))
                     }
                     Spacer()
-                    Button(action: { updater.openRelease() }) {
-                        Text("前往下载")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing)
-                            )
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                    Button(action: { updater.ignoreCurrent() }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
-                            .padding(6)
-                    }
-                    .buttonStyle(.plain)
-                    .help("忽略此版本")
+                    trailingControls
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -1101,6 +1080,122 @@ struct UpdateAvailableBanner: View {
             .allowsHitTesting(true)
             .transition(.move(edge: .top).combined(with: .opacity))
             .animation(.easeInOut(duration: 0.25), value: updater.status)
+        }
+    }
+
+    private var shouldShow: Bool {
+        switch updater.status {
+        case .available, .downloading, .readyToInstall, .failed:
+            // 失败也可能展示（提示回退到网页）；忽略/稍后的版本不展示
+            if let latest = updater.latestVersion,
+               (latest == updater.ignoredVersion || latest == updater.skippedVersion) {
+                return false
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var iconName: String {
+        if case .downloading = updater.status { return "arrow.down.circle" }
+        if case .readyToInstall = updater.status { return "checkmark.circle.fill" }
+        if case .failed = updater.status { return "exclamationmark.circle" }
+        return "arrow.down.circle.fill"
+    }
+
+    private var titleText: String {
+        switch updater.status {
+        case .available:      return "新版本 v\(updater.latestVersion ?? "") 可用"
+        case .downloading:   return "正在下载更新…"
+        case .readyToInstall:return "更新已就绪，即将重启"
+        case .failed(let m): return "更新失败：\(m)"
+        default:             return "更新"
+        }
+    }
+
+    private var subtitleText: String {
+        switch updater.status {
+        case .downloading(let p): return "\(Int(p * 100))% · 当前 v\(updater.currentVersion)"
+        case .failed:            return "可前往网页手动下载"
+        default:                 return "当前 v\(updater.currentVersion)"
+        }
+    }
+
+    @ViewBuilder
+    private var trailingControls: some View {
+        switch updater.status {
+        case .available:
+            // 主操作：自动下载并安装（无需手动下载）
+            Button(action: { updater.downloadAndInstall() }) {
+                Text("更新并重启")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing)
+                    )
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .help("自动下载并安装此更新")
+            // 次级：忽略此版本（永久不再提示）
+            Button(action: { updater.ignoreCurrent() }) {
+                Image(systemName: "bell.slash")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+            .help("不再提示此版本")
+            // 取消：本次稍后
+            Button(action: { updater.skipCurrent() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+            .help("稍后（本次不更新）")
+        case .downloading:
+            // 下载中：取消
+            Button(action: { updater.cancelDownload() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+            .help("取消下载")
+        case .readyToInstall:
+            // 即将重启，无需操作
+            EmptyView()
+        case .failed:
+            // 失败：回退到网页手动下载
+            Button(action: { updater.openRelease() }) {
+                Text("前往下载")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing)
+                    )
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .help("打开下载页面")
+            Button(action: { updater.skipCurrent() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+            .help("稍后")
+        default:
+            EmptyView()
         }
     }
 }
