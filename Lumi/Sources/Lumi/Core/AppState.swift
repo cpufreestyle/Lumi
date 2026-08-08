@@ -90,6 +90,10 @@ final class AppState: ObservableObject {
     }
     private let islandPinnedKey = "lumi_island_pinned"
 
+    /// 展开面板是否正在被手动缩放（拖拽右下角手柄中）。
+    /// 用于缩放期间冻结歌词区字号/尺寸的重排，避免每帧重建几十行歌词导致卡顿。
+    @Published var isResizing: Bool = false
+
     /// 轻量自研检查更新单例（GitHub Release 比对）
     let updater = Updater.shared
 

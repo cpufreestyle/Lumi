@@ -519,6 +519,7 @@ final class IslandWindowController: NSObject {
         guard let panel = window else { return }
         let s = panel.frame.size
         userSize = s
+        isResizing = false
         UserDefaults.standard.set([s.width, s.height], forKey: userSizeKey)
         // 释放缩放锁，允许后续状态变化正常重排窗口
         isResizing = false

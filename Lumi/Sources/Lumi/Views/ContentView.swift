@@ -1030,11 +1030,13 @@ struct ResizeHandle: View {
                         SharedIslandController.controller?.resizeBy(delta)
                         lastTranslation = v.translation
                         dragging = true
+                        AppState.shared.isResizing = true
                     }
                     .onEnded { _ in
                         SharedIslandController.controller?.saveUserSize()
                         lastTranslation = .zero
                         dragging = false
+                        AppState.shared.isResizing = false
                     }
             )
             .onHover { inside in
