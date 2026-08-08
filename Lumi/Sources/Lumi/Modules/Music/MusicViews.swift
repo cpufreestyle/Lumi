@@ -94,6 +94,7 @@ struct MusicBriefContent: View {
 // MARK: - 音乐模块：展开态完整视图
 struct MusicExpandedView: View {
     @ObservedObject private var music = MusicController.shared
+    @ObservedObject private var state = AppState.shared
     /// 卡片实际尺寸（随用户缩放变化）。据此让字幕字号与歌词区高度自适应卡片大小。
     @State private var viewSize: CGSize = CGSize(width: 360, height: 480)
 
@@ -128,6 +129,9 @@ struct MusicExpandedView: View {
         // 避免底部歌词区被裁切（尤其播放中带频谱时总高超上限）。
         GeometryReader { geo in
             ScrollView {
+            // 缩放拖拽期间：把内容区尺寸冻结为拖拽前的 viewSize，并裁剪，
+            // 避免窗口每帧变大导致 SwiftUI 对几十行歌词/封面做整树重排（卡顿主因）。
+            // 松手 (isResizing=false) 后才由下方 onChange 一次性按最终尺寸重排。
             VStack(spacing: 0) {
                 // 顶部固定头部：左侧歌手名、右侧黄色固定标志，占固定位置不随内容滚动
                 headerBar
@@ -167,7 +171,19 @@ struct MusicExpandedView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 16)
             }
-            .onChange(of: geo.size) { nv in viewSize = nv }
+            // 缩放拖拽期间：把内容 VStack 尺寸钉死在拖拽前的大小并裁剪，
+            // 窗口 frame 即便每帧变化，内部几十行歌词/封面不再重排，松手后一次性重排。
+            .frame(
+                width: state.isResizing ? viewSize.width : nil,
+                height: state.isResizing ? viewSize.height : nil,
+                alignment: .top
+            )
+            .clipped()
+            // 缩放拖拽期间冻结 viewSize：避免每帧重建几十行歌词造成卡顿，
+            // 松手（isResizing=false）后下一帧再一次性应用最终尺寸并重排。
+            .onChange(of: geo.size) { nv in
+                if !AppState.shared.isResizing { viewSize = nv }
+            }
             }
         }
     }
@@ -369,6 +385,21 @@ struct MusicExpandedView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(.white.opacity(0.45))
 
+                        // 时间轴校准滑块：放在「歌词」标题右侧。
+                        // 社区 LRC 时间轴常与播放位置有整体偏移，可手动对齐当前播放行。
+                        if !music.syncedLines.isEmpty,
+                           (music.lyricsOffset != 0 || music.playbackState == .playing) {
+                            Text("校准")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.45))
+                            Slider(value: $music.lyricsOffset, in: -10...10, step: 0.5)
+                                .frame(width: 90)
+                            Text(String(format: "%+.1fs", music.lyricsOffset))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.6))
+                                .frame(width: 40, alignment: .trailing)
+                        }
+
                         Spacer()
 
                         // 双语模式分段切换：原文 / 双语
@@ -414,21 +445,6 @@ struct MusicExpandedView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else if !music.syncedLines.isEmpty {
                         // Apple Music 官方歌词（带时间轴）：逐行高亮当前播放行。
-                        // 时间轴校准滑块：社区 LRC 时间轴常与播放位置有整体偏移，可手动对齐。
-                        if music.lyricsOffset != 0 || music.playbackState == .playing {
-                            HStack(spacing: 6) {
-                                Text("校准")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.45))
-                                Slider(value: $music.lyricsOffset, in: -10...10, step: 0.5)
-                                    .frame(width: 130)
-                                Text(String(format: "%+.1fs", music.lyricsOffset))
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .frame(width: 44, alignment: .trailing)
-                            }
-                            .padding(.bottom, 4)
-                        }
                         LyricsSyncView(lines: music.syncedLines,
                                        currentTime: music.currentTime,
                                        offset: music.lyricsOffset,
@@ -518,7 +534,7 @@ struct LyricsSyncView: View {
                                 .font(.system(size: i == activeIndex ? activeSize : baseSize,
                                               weight: i == activeIndex ? .semibold : .regular))
                                 .foregroundColor(
-                                    i == activeIndex ? .white : .white.opacity(0.5)
+                                    i == activeIndex ? Color.pink : .white.opacity(0.5)
                                 )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .lineSpacing(4)
@@ -526,7 +542,7 @@ struct LyricsSyncView: View {
                                 Text(tr)
                                     .font(.system(size: translationSize,
                                                   weight: .regular))
-                                    .foregroundColor(.white.opacity(i == activeIndex ? 0.6 : 0.38))
+                                    .foregroundColor(.white.opacity(i == activeIndex ? 0.7 : 0.38))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .lineSpacing(3)
                             }
