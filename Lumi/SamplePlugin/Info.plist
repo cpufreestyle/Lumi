@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleDisplayName</key>
+    <string>LumiSamplePlugin</string>
+    <key>CFBundleExecutable</key>
+    <string>LumiSamplePlugin</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.lumi.sample-plugin</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>LumiSamplePlugin</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- 注册 URL Scheme，使 Lumi 面板按钮能通过 lumi-sample:// 回传 -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.lumi.sample-plugin</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>lumi-sample</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

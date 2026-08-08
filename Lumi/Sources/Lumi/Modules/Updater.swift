@@ -192,40 +192,22 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             startDownload(from: url)
             return
         }
-        // 没有下载地址：先尝试从当前 Release 页面解析 zip 链接，拿到后再下载
+        // 没有下载地址：用已知命名规律直接拼接（与发布脚本一致），不依赖 HTML 解析
         status = .downloading(0)
-        log("更新并重启：downloadURL 缺失，先解析压缩包地址（tag=\(latestVersion ?? "?")，releaseURL=\(releaseURL?.absoluteString ?? "nil")）")
-        guard let htmlURL = releaseURL,
-              let tag = latestVersion else {
-            log("更新并重启：缺少 releaseURL 或版本号，回退网页")
+        guard let tag = latestVersion else {
+            log("更新并重启：缺少版本号，回退网页")
             status = .available
             openRelease()
             return
         }
-        let assetsURLString = "https://github.com/\(repo)/releases/expanded_assets/\(tag)"
-        guard let assetsURL = URL(string: assetsURLString) else {
+        guard let dl = URL(string: "https://github.com/\(repo)/releases/download/\(tag)/Lumi-\(tag).zip") else {
             status = .available
             openRelease()
             return
         }
-        var req = URLRequest(url: assetsURL, timeoutInterval: 15)
-        req.cachePolicy = .reloadIgnoringLocalCacheData
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let self = self else { return }
-            if let html = data, let dl = self.extractZipURL(from: html, tag: tag) {
-                DispatchQueue.main.async {
-                    self.downloadURL = dl
-                    self.log("更新并重启：解析到下载地址 \(dl.absoluteString)，开始下载")
-                    self.startDownload(from: dl)
-                }
-            } else {
-                self.log("更新并重启：解析压缩包地址失败，回退网页")
-                DispatchQueue.main.async {
-                    self.status = .available
-                    self.openRelease()
-                }
-            }
-        }.resume()
+        log("更新并重启：downloadURL 缺失，按命名规律拼接 \(dl.absoluteString)")
+        downloadURL = dl
+        startDownload(from: dl)
     }
 
     /// 真正发起下载任务
@@ -303,23 +285,20 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         return raw.hasPrefix("v") ? String(raw.dropFirst()) : raw
     }
 
-    /// 拿到版本号后统一设置状态与下载地址（下载地址仍取自 Release 资源页，需再请求一次 HTML 拿 zip 链接）。
+    /// 拿到版本号后统一设置状态与下载地址。
+    /// 下载地址优先按「已知命名规律」直接拼接：
+    ///   https://github.com/{repo}/releases/download/{tag}/Lumi-{tag}.zip
+    /// 这与发布脚本（release_vX.Y.Z.sh 中 ditto 打出的 Lumi-vX.Y.Z.zip）一一对应，
+    /// 不依赖 GitHub 资源页的 HTML 解析（其资源列表是 JS 懒加载，静态源码里取不到 .zip 链接，
+    /// 旧逻辑会因此永远回退到「打开网页」而无法自动安装）。
     private func applyLatest(tag: String, htmlURL: URL) {
         let latest = tag
         latestVersion = latest
         releaseURL = htmlURL
-        // Release 资源里的 .app 压缩包下载地址：从 .../releases/tag/vX 拼出 /expanded_assets/vX
-        // 这里简单粗暴：用 tag 页的 expanded_assets 路径抓 zip（解析 HTML 中的 .zip 链接）
-        let assetsURLString = "https://github.com/\(repo)/releases/expanded_assets/\(tag)"
-        if let assetsURL = URL(string: assetsURLString) {
-            var req = URLRequest(url: assetsURL, timeoutInterval: 15)
-            req.cachePolicy = .reloadIgnoringLocalCacheData
-            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-                guard let self = self else { return }
-                if let html = data, let dl = self.extractZipURL(from: html, tag: tag) {
-                    DispatchQueue.main.async { self.downloadURL = dl }
-                }
-            }.resume()
+        // 直接拼接压缩包地址（tag 形如 v1.1.9 → Lumi-v1.1.9.zip）
+        if let dl = URL(string: "https://github.com/\(repo)/releases/download/\(tag)/Lumi-\(tag).zip") {
+            downloadURL = dl
+            log("下载地址已拼接：\(dl.absoluteString)")
         }
         if isNewer(latest, than: currentVersion) {
             status = .available

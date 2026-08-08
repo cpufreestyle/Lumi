@@ -471,40 +471,6 @@ struct MusicExpandedView: View {
     }
 }
 
-// MARK: - 音频可视化频谱
-struct AudioVisualizer: View {
-    @State private var timer: Timer?
-    @State private var amplitudes: [CGFloat] = Array(repeating: 3, count: 48)
-
-    var body: some View {
-        HStack(spacing: 1.5) {
-            ForEach(0..<48, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(barColor(for: i, amplitude: amplitudes[i]))
-                    .frame(width: 2.5, height: max(3, amplitudes[i]))
-                    .animation(.linear(duration: 0.06), value: amplitudes[i])
-            }
-        }
-        .onAppear {
-            timer = Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { _ in
-                DispatchQueue.main.async {
-                    amplitudes = (0..<48).map { _ in CGFloat.random(in: 3...36) }
-                }
-            }
-        }
-        .onDisappear { timer?.invalidate() }
-    }
-
-    func barColor(for index: Int, amplitude: CGFloat) -> Color {
-        let ratio = amplitude / 36.0
-        return Color(
-            hue: 0.88 - ratio * 0.18,
-            saturation: 0.75,
-            brightness: 0.45 + ratio * 0.45
-        )
-    }
-}
-
 // MARK: - Apple Music 逐行高亮歌词
 /// 根据当前播放进度高亮对应歌词行，并自动滚动到该行。
 struct LyricsSyncView: View {

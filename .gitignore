@@ -26,3 +26,7 @@ build.log
 
 # 外部工具本地产物（非项目源码）
 .qoder/
+
+# 构建/发布产物与示例插件二进制（体积大，不进版本库；
+# 示例插件 zip 由 make_sample_plugin.sh --zip 生成后手动上传 Release）
+*.zip

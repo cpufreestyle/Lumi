@@ -93,11 +93,26 @@ final class AppState: ObservableObject {
     /// 轻量自研检查更新单例（GitHub Release 比对）
     let updater = Updater.shared
 
+    /// 插件发现管理器（Phase 0 插件市场骨架）
+    let plugins = PluginDiscovery.shared
+
+    /// L3 面板桥接（Phase 2：第三方插件向内嵌面板回写结构化内容）
+    let pluginPanels = PluginPanelBridge.shared
+
+    /// 当前选中的 L3 插件模块 id（nil = 未选中插件模块，显示原生模块）。
+    /// 标签栏里带 panel 的插件会作为独立标签，点击即设置此值并显示其内嵌面板。
+    @Published var selectedPluginPanelID: String? = nil
+
     private init() {
         islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
         islandPinned = UserDefaults.standard.object(forKey: islandPinnedKey) as? Bool ?? false
         // 启动后静默检查一次更新（后台，不弹窗，除非发现新版本）
         updater.autoCheckOnLaunch()
+        // 启动后扫描本地已安装的第三方插件（带 lumi-plugin.json 的 .app）。
+        // PluginDiscovery 为 @MainActor，init 非 isolated，故用 Task 切回主线程。
+        Task { @MainActor in
+            plugins.scan()
+        }
     }
 
     /// 检查当前选中的模块是否可用（付费模块需已激活）

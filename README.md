@@ -1,5 +1,7 @@
 # Lumi
 
+> **当前版本：v1.1.8**（与 GitHub Release 保持一致）
+
 macOS 顶部「动态岛」聚合面板。常驻屏幕顶部状态栏上方，鼠标悬停热区时显示，移开自动隐藏。把音乐歌词、电池状态、视频下载、Claude Code / Codex 集成收进一个轻量胶囊界面。
 
 ## 功能模块
@@ -12,6 +14,96 @@ macOS 顶部「动态岛」聚合面板。常驻屏幕顶部状态栏上方，�
 | Claude Code | 本地 Claude Code CLI 集成入口 |
 | Codex | 本地 Codex CLI 集成入口 |
 | 许可证 | 付费模块解锁管理 |
+| 插件 | 第三方 macOS 应用可接入灵动岛（实验性，见下） |
+
+## 插件市场（实验性 · Phase 0）
+
+Lumi 支持把**任意第三方 macOS 应用**接入灵动岛面板，形成可扩展的插件生态：
+
+- 第三方 app 只需在 `Contents/Resources/lumi-plugin.json` 声明清单（id / 名称 / 图标 / 唤起 scheme / 权限），Lumi 启动时会自动扫描 `/Applications`、`~/Applications` 与 `~/Library/Application Support/Lumi/Plugins/` 并挂载。
+- 点击插件即按 URL Scheme（如 `bartender://`）或 `open .app` 唤起该 app，**第三方 app 在自己进程运行，权限各自申请**，Lumi 宿主本体不共享敏感权限，side effect 面更小。
+- 清单格式见 `Sources/Lumi/Core/Plugin/PluginManifest.swift`；扫描逻辑见 `PluginDiscovery.swift`。
+
+快速体验：运行仓库内 `make_sample_plugin.sh` 会在 Plugins 目录生成一个示例插件 `.app`，重启 Lumi 后展开面板底部「插件」区即可看到。
+
+## 插件市场（已落地 · Phase 1）
+
+展开面板底部「插件」区提供两个分段：
+
+- **已安装**：本地发现的第三方 app，点击即唤起（URL Scheme / open .app）。
+- **市场**：从官方源（仓库 `Lumi/plugin-feed.json`，远程失败回退内置副本）拉取可安装插件，支持**一键安装 / 卸载**，带下载进度。
+
+### 让第三方 app 接入（两种方式）
+
+1. **本地发现（L2）**：第三方 app 在 `Contents/Resources/lumi-plugin.json` 声明清单：
+
+   ```json
+   {
+     "id": "com.example.myapp",
+     "name": "我的应用",
+     "iconName": "star",
+     "urlScheme": "myapp",
+     "panelHint": "一句话描述",
+     "permissions": [{ "type": "network", "reason": "需要联网" }]
+   }
+   ```
+
+   放入 `/Applications` 或 `~/Library/Application Support/Lumi/Plugins/` 即可被自动发现。
+2. **上架市场**：维护者在 `plugin-feed.json` 增加条目（含 `downloadURL` 指向 `.app.zip`），
+   把 zip 上传到 Release。用户点「安装」即下载 → 解压 → 去隔离 → 放入 Plugins → 重新扫描。
+
+### 安全闸门（当前实现）
+
+- 安装前在「市场」列表展示插件声明的 `permissions`（橙色徽标 + 悬浮说明），透明告知。
+- 每个插件独立进程、独立权限，Lumi 宿主本体不共享敏感权限。
+- 官方源为可信 JSON（v1.2 计划加签名校验）；社区源接口预留，默认关闭。
+
+### L3 深度集成：插件内嵌面板（Phase 2 · 已落地）
+
+除了被「唤起」（L1/L2），带 `panel: true` 的插件还能把**结构化内容内嵌**到 Lumi 展开面板，
+像一个原生模块一样出现在标签栏，点击即显示其面板（文本/键值/进度/按钮）。
+
+实现采用**零签名阻力**的共享目录桥接（不依赖 XPC / App Group，任何第三方 app 只要能写文件即可）：
+
+1. 插件在 `lumi-plugin.json` 声明 `"panel": true`。
+2. 插件周期性把面板数据写到
+   `~/Library/Application Support/Lumi/PluginPanels/<pluginID>.json`：
+
+   ```json
+   {
+     "id": "com.example.myapp",
+     "title": "我的插件",
+     "iconName": "star",
+     "subtitle": "实时状态",
+     "lines": [
+       { "kv": { "key": "状态", "value": "运行中" } },
+       { "progress": 0.42 },
+       { "button": { "title": "执行" } }
+     ],
+     "updatedAt": 1700000000
+   }
+   ```
+
+   `lines` 支持 `text` / `kv` / `progress`(0~1) / `button` 四种行。Lumi 每 1 秒轮询，
+   超过 30 秒未更新会提示「插件可能已退出」。面板内按钮点击会向插件声明的
+   URL Scheme 发 `myapp://action?name=<按钮标题>`，由插件自行处理。
+
+3. Lumi 扫描到带 `panel: true` 的插件后，自动在标签栏追加其标签，无需额外配置。
+
+> 说明：XPC 双向通信（v2 计划）能提供更低延迟与双向调用，但需要签名授权文件、
+> 对 ad-hoc/免费账号不友好；当前文件桥接方案在「能被任意第三方接入」与「实现成本」
+> 之间取得平衡。如后续需要，可平滑升级到 XPC。
+
+### 示例插件打包
+
+```bash
+./make_sample_plugin.sh            # 生成示例插件 + L3 示例面板数据
+./make_sample_plugin.sh --zip      # 生成并打包 LumiSamplePlugin.app.zip
+./make_sample_plugin.sh --clean    # 清理示例插件
+```
+
+运行 `./make_sample_plugin.sh` 后，重启 Lumi，展开面板标签栏会出现「示例插件（天气）」标签，
+点击即可看到内嵌的天气卡片（含进度条与「刷新天气」按钮，按钮通过 `lumi-sample://` 回传插件）。
 
 ## 安装
 

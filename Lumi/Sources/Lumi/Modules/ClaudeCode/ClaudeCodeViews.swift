@@ -338,6 +338,7 @@ struct CCMessageBubble: View {
 // MARK: - 加载气泡
 struct CCLoadingBubble: View {
     @State private var dotCount: Int = 0
+    @State private var timer: Timer?
 
     var body: some View {
         HStack(alignment: .top) {
@@ -354,10 +355,13 @@ struct CCLoadingBubble: View {
                 .cornerRadius(10)
         }
         .onAppear {
-            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { t in
+            // 持有 timer 并停止旧的，避免每次出现都泄漏一个永不停止的定时器
+            timer?.invalidate()
+            timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [self] t in
                 dotCount += 1
                 if dotCount > 100 { t.invalidate() }
             }
         }
+        .onDisappear { timer?.invalidate() }
     }
 }

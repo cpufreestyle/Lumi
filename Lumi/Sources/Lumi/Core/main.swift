@@ -61,8 +61,11 @@ final class IslandWindowController: NSObject {
     private let externalHotZoneHeight: CGFloat = 4
     private let externalHotZoneWidth: CGFloat = 160
 
-    /// 鼠标移出后延迟隐藏，避免抖动
-    private let hideDelay: TimeInterval = 0.25
+    /// 鼠标移出后延迟隐藏（秒）。基础值较短，避免普遍影响面板下方其他交互。
+    private let hideDelay: TimeInterval = 0.6
+    /// 音乐播放时收缩态小胶囊（含歌词）额外停留，让用户有时间看清歌词；
+    /// 仅作用于音乐场景，不拖慢其他模块。
+    private let musicLyricsHideDelay: TimeInterval = 2.5
 
     /// 用户手动调整的展开态窗口尺寸；为 nil 时回退到默认 360×480。
     /// 持久化保存，下次展开沿用，避免每次都重新拖。
@@ -343,8 +346,13 @@ final class IslandWindowController: NSObject {
             hideTimer?.invalidate(); hideTimer = nil
             return
         }
+        // 仅当「音乐模块 + 正在播放」时给较长停留（让歌词多停一会儿），
+        // 其他场景维持基础短延迟，避免影响面板下方其他交互与歌词显示。
+        let isMusicPlaying = AppState.shared.activeModule == .music &&
+            MusicController.shared.playbackState == .playing
+        let delay = isMusicPlaying ? musicLyricsHideDelay : hideDelay
         hideTimer?.invalidate()
-        hideTimer = Timer.scheduledTimer(withTimeInterval: hideDelay, repeats: false) { [weak self] _ in
+        hideTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             self?.hideIsland()
         }
     }

@@ -235,9 +235,15 @@ struct ExpandedView: View {
                 UpdateFeedbackBanner()
                     .padding(.top, 8)
 
-                // 模块内容
-                moduleContentView
-                    .frame(maxHeight: .infinity)
+                // 模块内容 + 插件区（整体可滚动，插件区始终在模块下方可见）
+                ScrollView(.vertical, showsIndicators: false) {
+                    moduleContentView
+                        .padding(.bottom, 6)
+
+                    PluginSection()
+                        .padding(.bottom, 4)
+                }
+                .frame(maxHeight: .infinity)
 
                 // 底部拖拽指示器
                 RoundedRectangle(cornerRadius: 2)
@@ -349,8 +355,14 @@ struct ExpandedView: View {
                 GameExpandedView()
             }
 
-            // 付费功能锁定遮罩
-            if state.activeModule.isPremium && !state.canAccessActiveModule {
+            // L3：选中带 panel 的第三方插件时，其内嵌面板覆盖原生模块内容
+            if let pid = state.selectedPluginPanelID,
+               let panel = state.pluginPanels.panels[pid] {
+                PluginPanelView(panel: panel)
+            }
+
+            // 付费功能锁定遮罩（仅原生付费模块）
+            if state.activeModule.isPremium && state.selectedPluginPanelID == nil && !state.canAccessActiveModule {
                 PremiumLockOverlay(module: state.activeModule)
             }
         }
@@ -375,6 +387,7 @@ struct TabBarView: View {
                         Button(action: {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                                 state.activeModule = mod
+                                state.selectedPluginPanelID = nil
                             }
                             // 点击付费模块时弹出许可证面板
                             if mod.isPremium,
@@ -397,7 +410,29 @@ struct TabBarView: View {
                                 Text(mod.shortName)
                                     .font(.system(size: 9, weight: .medium))
                             }
-                            .foregroundColor(state.activeModule == mod ? .pink : .white.opacity(0.5))
+                            .foregroundColor(state.activeModule == mod && state.selectedPluginPanelID == nil ? .pink : .white.opacity(0.5))
+                            .frame(minWidth: 38, maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    // L3 动态插件模块标签：带 panel 的插件以独立标签出现
+                    ForEach(state.plugins.plugins.filter { $0.panel }, id: \.id) { plugin in
+                        let isSel = state.selectedPluginPanelID == plugin.id
+                        Button(action: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                                state.selectedPluginPanelID = plugin.id
+                            }
+                        }) {
+                            VStack(spacing: 3) {
+                                Image(systemName: plugin.resolvedIconName)
+                                    .font(.system(size: 15))
+                                Text(plugin.resolvedName)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .lineLimit(1)
+                            }
+                            .foregroundColor(isSel ? .pink : .white.opacity(0.5))
                             .frame(minWidth: 38, maxWidth: .infinity)
                             .padding(.vertical, 10)
                         }
