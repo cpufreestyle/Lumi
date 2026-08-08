@@ -30,3 +30,6 @@ build.log
 # 构建/发布产物与示例插件二进制（体积大，不进版本库；
 # 示例插件 zip 由 make_sample_plugin.sh --zip 生成后手动上传 Release）
 *.zip
+
+# 工作记忆 / 编辑器运行时数据（非源码，不进版本库）
+.codebuddy/
