@@ -31,20 +31,45 @@ macOS 顶部「动态岛」聚合面板。常驻屏幕顶部状态栏上方，�
 
 要求：macOS 14+，已安装 Xcode（含命令行工具），且 `DEVELOPER_DIR` 指向 Xcode。
 
+#### 免费账号本地运行（推荐，无需付费开发者）
+
+用你登录在 Xcode 里的**普通免费 Apple ID** 即可在本地签名运行，无需加入付费的 Apple Developer Program（¥688/年）。
+
+1. 在 **Xcode ▸ Settings ▸ Accounts** 添加你的普通 Apple ID（免费即可）。
+2. 任意打开/新建一个项目，在 Signing & Capabilities 勾选该账号，让 Xcode 自动生成「Apple Development」证书。
+3. 回到 Lumi 目录直接运行：
+
+   ```bash
+   git clone https://github.com/cpufreestyle/Lumi.git
+   cd Lumi
+   bash Lumi/sign_and_run.sh        # 编译 + 免费账号签名 + 启动
+   ```
+
+   首次启动会弹出「Lumi 想控制『音乐』」等授权框，点击「好/允许」即可。若弹窗缺失，可在 **系统设置 ▸ 隐私与安全性 ▸ 自动化** 中手动勾选 Lumi。
+
+常用命令：
+
 ```bash
-git clone https://github.com/cpufreestyle/Lumi.git
 cd Lumi
-bash Lumi/run.sh restart      # 构建并启动
+bash Lumi/sign_and_run.sh identities   # 查看本机可用的免费签名身份
+bash Lumi/sign_and_run.sh run          # 仅重新签名并启动（证书过期重签时用）
+bash Lumi/restart_lumi.sh              # 退出旧实例 → 重签名 → 启动
+bash Lumi/sign_and_run.sh --adhoc      # 退回 ad-hoc 自签名（不依赖账号，但会改 TCC 数据库）
 ```
 
-或手动构建：
+> 免费开发证书签名的 app 可长期在本机运行；若某天提示「已损坏/无法验证」，直接 `bash Lumi/restart_lumi.sh` 会自动检测并重签。
 
-```bash
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-cd Lumi
-swift build
-open .build/Lumi.app
-```
+#### 其他方式
+
+- `bash Lumi/run.sh restart`：构建并启动（ad-hoc 签名 + 写入用户级 TCC 授权库）。
+- 手动构建：
+
+  ```bash
+  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+  cd Lumi
+  swift build
+  open .build/Lumi.app
+  ```
 
 ## 使用
 
@@ -130,11 +155,15 @@ swift run license-tool revoke-list --nonces <N1>,<N2>
 - **歌词不显示**：确认 Music.app 正在播放且已授予「媒体与 Apple Music」权限；部分曲目的在线歌词库无数据属正常情况。
 - **界面不出现**：把鼠标移动到屏幕最顶部（状态栏上方）热区。
 - **下载失败**：确认已执行 `brew install yt-dlp`，且链接所属站点受支持。
+- **签名/证书问题**：用免费账号运行 `bash Lumi/sign_and_run.sh` 时若提示「no identity found」，请在 Xcode ▸ Settings ▸ Accounts 先登录免费 Apple ID 并触发一次证书生成；若提示 app「已损坏/无法验证」，多半是免费开发证书过期，执行 `bash Lumi/restart_lumi.sh` 会自动检测并重签，或手动到 Xcode ▸ Accounts ▸ Manage Certificates 重置「Apple Development」证书。
 
 ## 开发
 
 - 源码位于 `Lumi/Sources/Lumi/`，按 `Core`（状态/许可证）、`Modules`（各功能模块）、`Views`（界面）组织。
-- 构建与运行统一通过 `Lumi/run.sh`：`build` 编译、`launch` 启动、`restart` 重新编译并启动。
+- 构建与运行：
+  - `Lumi/sign_and_run.sh`（**免费账号自签名**，推荐日常本地使用）：用 Xcode 登录的免费 Apple ID 开发证书签名并启动，证书过期会自动重签；支持 `build`/`run`/`identities`/`--adhoc` 子命令。
+  - `Lumi/run.sh`（ad-hoc 签名 + 写入用户级 TCC 授权库）：`build` 编译、`launch` 启动、`restart` 重新编译并启动、`tcc` 仅写 TCC 授权。
+  - `Lumi/restart_lumi.sh`：退出旧实例 → 调用 `sign_and_run.sh` 重新签名并启动。
 
 ### 在 Cursor / VS Code 中调试（CodeLLDB）
 

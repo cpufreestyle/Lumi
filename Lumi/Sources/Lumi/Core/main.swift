@@ -40,6 +40,7 @@ final class SharedIslandController {
 // MARK: - 动态岛窗口控制器
 final class IslandWindowController: NSObject {
     private var window: NSPanel!
+    private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
     private var mouseMonitor: Any?
     private var hideTimer: Timer?
@@ -155,6 +156,9 @@ final class IslandWindowController: NSObject {
         panel.orderOut(nil)
 
         // 全局鼠标移动监控：判断指针是否进入动态岛热区
+        // 注意：addGlobalMonitorForEvents 需要「辅助功能」权限才能收到事件。
+        // 若未授权（如 ad-hoc 签名每次 cdhash 变化导致授权失效），热区不会触发，
+        // 此时可改用菜单栏图标手动唤出（见 setupStatusItem）。
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             self?.evaluateHotZone()
         }
@@ -163,6 +167,9 @@ final class IslandWindowController: NSObject {
             self?.evaluateHotZone()
             return ev
         }
+
+        // 菜单栏图标：即使没有辅助功能权限，也能看到应用并手动唤出动态岛
+        setupStatusItem()
 
         // 屏幕拓扑变化（开合盖、插拔显示器、分辨率变更）：
         // 目标屏可能已消失或改变，立即按新的 builtInScreen 重新定位，
@@ -209,6 +216,7 @@ final class IslandWindowController: NSObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] enabled in
                 AppState.shared.isExpanded = false
+                self?.statusToggleItem?.title = enabled ? "隐藏动态岛" : "显示动态岛"
                 if enabled {
                     self?.evaluateHotZone()
                 } else {
@@ -322,6 +330,56 @@ final class IslandWindowController: NSObject {
 
     private func hideIsland() {
         window?.orderOut(nil)
+    }
+
+    // MARK: - 菜单栏图标（不依赖辅助功能权限的常驻入口）
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let btn = item.button {
+            // 优先用应用图标，缺失时回退到文字
+            if let img = NSImage(named: "AppIcon") {
+                img.size = NSSize(width: 18, height: 18)
+                btn.image = img
+            } else {
+                btn.title = "🌙"
+            }
+            btn.toolTip = "Lumi 动态岛"
+        }
+        let menu = NSMenu()
+        let toggle = NSMenuItem(title: "显示动态岛", action: #selector(statusToggle), keyEquivalent: "")
+        toggle.target = self
+        menu.addItem(toggle)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "退出 Lumi", action: #selector(statusQuit), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+        item.menu = menu
+        self.statusItem = item
+        self.statusToggleItem = toggle
+    }
+
+    private var statusToggleItem: NSMenuItem?
+
+    @objc private func statusToggle() {
+        toggleIsland()
+    }
+
+    @objc private func statusQuit() {
+        NSApp.terminate(nil)
+    }
+
+    /// 由菜单栏图标调用：切换动态岛显隐
+    func toggleIsland() {
+        if AppState.shared.islandEnabled {
+            AppState.shared.islandEnabled = false
+            hideIsland()
+            statusToggleItem?.title = "显示动态岛"
+        } else {
+            AppState.shared.islandEnabled = true
+            AppState.shared.islandPinned = true   // 锁定常驻，避免鼠标移开即收起
+            showIsland()
+            statusToggleItem?.title = "隐藏动态岛"
+        }
     }
 
     /// 根据当前状态决定窗口尺寸、位置与显隐

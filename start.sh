@@ -10,7 +10,7 @@ echo "🎵 启动 Lumi..."
 node server.js &
 SERVER_PID=$!
 
-sleep 2
+sleep 
 
 # 验证服务是否启动
 if curl -s http://localhost:3000/api/config-status > /dev/null 2>&1; then

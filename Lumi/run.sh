@@ -106,6 +106,9 @@ INSERT OR REPLACE INTO access
   add_row "kTCCServiceCalendar" "UNUSED" ""
   add_row "kTCCServiceBluetoothAlways" "UNUSED" ""
   add_row "kTCCServiceBluetooth" "UNUSED" ""
+  # 辅助功能：全局鼠标监控（NSEvent.addGlobalMonitorForEvents）必须有权限才能收到事件，
+  # 否则动态岛热区永远无法触发，胶囊窗口始终隐藏。
+  add_row "kTCCServiceAccessibility" "UNUSED" ""
   [ -s /tmp/music.csreq ] && add_row "kTCCServiceAppleEvents" "com.apple.Music" "/tmp/music.csreq"
 
   # -- dry-run 模式：仅打印将要执行的操作 --
