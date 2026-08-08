@@ -44,6 +44,10 @@ package() {
   mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
   cp "$BIN" "$APP/Contents/MacOS/Lumi"
   cp Resources/Info.plist "$APP/Contents/Info.plist"
+  # 应用图标（AppIcon.icns）：若存在则打入 .app，并在 Info.plist 已声明 CFBundleIconFile
+  if [ -f "Resources/AppIcon.icns" ]; then
+    cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+  fi
   xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
   echo "✅ 已打包 $APP"
 }
