@@ -66,42 +66,27 @@ struct WidthKey: PreferenceKey {
 // MARK: - 音乐模块：收缩态简要
 struct MusicBriefContent: View {
     @ObservedObject private var music = MusicController.shared
-    @ObservedObject private var state = AppState.shared
 
     var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                if music.isPlaying {
-                    if music.showLyrics, !music.currentLineText.isEmpty {
-                        // 当前歌词作为视觉焦点：放大并加粗
-                        MarqueeText(
-                            text: music.currentLineText,
-                            font: .system(size: 12.5, weight: .semibold)
-                        )
-                        .frame(height: 16)
-                        // 次要信息（歌手/来源）进一步淡显，突出当前歌词
-                        Text(music.artist.isEmpty ? "Apple Music" : music.artist)
-                            .font(.system(size: 8.5, weight: .regular))
-                            .foregroundColor(.white.opacity(0.32))
-                            .lineLimit(1)
-                    } else {
-                        let fallback = "\(music.title.isEmpty ? "正在播放" : music.title)\(music.artist.isEmpty ? "" : " - " + music.artist)"
-                        MarqueeText(text: fallback, font: .system(size: 12.5, weight: .semibold))
-                            .frame(height: 16)
-                    }
-                } else {
-                    Text("未在播放")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                        .lineLimit(1)
-                    Text("打开音乐 App")
-                        .font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.4))
-                        .lineLimit(1)
-                }
+        // 小胶囊只显示当前歌词（歌手名与黄色固定标志已移到 music 展开页头部）
+        if music.isPlaying {
+            if music.showLyrics, !music.currentLineText.isEmpty {
+                // 当前歌词作为视觉焦点：尽量撑大
+                MarqueeText(
+                    text: music.currentLineText,
+                    font: .system(size: 14.5, weight: .semibold)
+                )
+                .frame(height: 18)
+            } else {
+                let fallback = "\(music.title.isEmpty ? "正在播放" : music.title)\(music.artist.isEmpty ? "" : " - " + music.artist)"
+                MarqueeText(text: fallback, font: .system(size: 14.5, weight: .semibold))
+                    .frame(height: 18)
             }
-            // 让文本区占满中间空间，把右侧的固定按钮自然推到最右边
-            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text("未在播放 · 打开音乐 App")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
+                .lineLimit(1)
         }
     }
 }
@@ -116,20 +101,21 @@ struct MusicExpandedView: View {
     // 卡片放大时字变大、缩小时字变小，始终与卡片尺寸协调。
     private var lyricBaseSize: CGFloat {
         let w = max(280, min(viewSize.width, 520))
-        return min(22, max(15, 17 * (w / 360)))
+        // 放大歌词基础字号：基准 360 宽 → 19pt（原 17），上限提到 26
+        return min(26, max(17, 19 * (w / 360)))
     }
-    private var lyricActiveSize: CGFloat { lyricBaseSize + 2 }
+    private var lyricActiveSize: CGFloat { lyricBaseSize + 3 }
     private var translationSize: CGFloat {
         let w = max(280, min(viewSize.width, 520))
-        return min(18, max(13, 15 * (w / 360)))
+        return min(20, max(14, 16 * (w / 360)))
     }
     // 歌词区高度随卡片高度比例自适应（卡片越高，可展示的歌词越多）。
     // 已移除顶部音频频谱可视化，把原频谱占用的空间（约 40pt）补偿给歌词区，
-    // 让歌词区更舒展、不再留白。
+    // 让歌词区更舒展、不再留白。整体尽量撑大：基准映射到更高区间。
     private var lyricAreaHeight: CGFloat {
         let h = max(360, min(viewSize.height, 720))
-        // 360→140，720→280 线性映射（在原基础上 +40，补回频谱空间）
-        return min(300, max(120, 140 + (h - 360) / (720 - 360) * (280 - 140)))
+        // 360→180，720→360 线性映射（尽量撑大歌词区）
+        return min(380, max(160, 180 + (h - 360) / (720 - 360) * (360 - 180)))
     }
     // 专辑封面随卡片宽度等比缩放：基准 360 宽 → 160，夹在 120–240。
     private var artworkSize: CGFloat {
@@ -143,24 +129,25 @@ struct MusicExpandedView: View {
         GeometryReader { geo in
             ScrollView {
             VStack(spacing: 0) {
+                // 顶部固定头部：左侧歌手名、右侧黄色固定标志，占固定位置不随内容滚动
+                headerBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+
                 // 专辑封面
                 albumArtworkSection
-                    .padding(.top, 16)
+                    .padding(.top, 12)
 
-            // 歌曲信息
+            // 歌曲信息（歌手名已移至顶部固定头部，此处只留歌名，省出空间给歌词）
             VStack(spacing: 2) {
                 Text(music.title.isEmpty ? "未在播放" : music.title)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
-                Text(music.artist.isEmpty ? "在音乐 App 中播放歌曲" : music.artist)
-                    .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.55))
-                    .lineLimit(1)
             }
             .padding(.horizontal, 24)
-            .padding(.top, 12)
+            .padding(.top, 10)
 
             // 进度条
             progressSection
@@ -182,6 +169,30 @@ struct MusicExpandedView: View {
             }
             .onChange(of: geo.size) { nv in viewSize = nv }
             }
+        }
+    }
+
+    // MARK: 顶部固定头部：歌手名（左） + 黄色固定标志（右）
+    var headerBar: some View {
+        HStack(spacing: 8) {
+            Text(music.artist.isEmpty ? "歌手" : music.artist)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    AppState.shared.islandPinned.toggle()
+                }
+            } label: {
+                Image(systemName: AppState.shared.islandPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppState.shared.islandPinned ? .yellow : .white.opacity(0.5))
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.plain)
+            .help(AppState.shared.islandPinned ? "取消固定小胶囊" : "固定小胶囊（常驻显示）")
         }
     }
 

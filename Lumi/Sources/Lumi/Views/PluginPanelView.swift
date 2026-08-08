@@ -22,9 +22,18 @@ struct PluginPanelView: View {
                         LinearGradient(colors: [Color.pink, Color.purple],
                                        startPoint: .topLeading, endPoint: .bottomTrailing)))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(panel.title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
+                    HStack(spacing: 4) {
+                        Text(panel.title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
+                        // 权限提示图标：只在插件分页头部显示，与已安装列表区分
+                        if let perms = pluginPermissions, !perms.isEmpty {
+                            Image(systemName: "hand.raised.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.orange.opacity(0.85))
+                                .help(perms.map { "\($0.type): \($0.reason)" }.joined(separator: "\n"))
+                        }
+                    }
                     if let sub = panel.subtitle, !sub.isEmpty {
                         Text(sub)
                             .font(.system(size: 11))
@@ -77,6 +86,14 @@ struct PluginPanelView: View {
                 }
             }
 
+            // 仅「示例插件（天气）」页面内显示已安装/市场列表模块，其他位置不出现
+            if panel.id == "com.lumi.sample-plugin" {
+                Divider().background(Color.white.opacity(0.1)).padding(.horizontal, 16)
+                PluginSection()
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+
             if panel.isStale {
                 Text("插件数据已 30 秒未更新，可能已退出")
                     .font(.system(size: 9))
@@ -127,5 +144,10 @@ struct PluginPanelView: View {
 
     private var pluginScheme: String? {
         plugins.plugins.first(where: { $0.id == panel.id })?.urlScheme
+    }
+
+    /// 插件声明的权限列表（用于在分页头部显示橙色手形徽标）
+    private var pluginPermissions: [PluginPermission]? {
+        plugins.plugins.first(where: { $0.id == panel.id })?.permissions
     }
 }

@@ -136,12 +136,6 @@ struct PluginSection: View {
                     }
                 }
                 Spacer(minLength: 4)
-                if let perms = plugin.permissions, !perms.isEmpty {
-                    Image(systemName: "hand.raised.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.orange.opacity(0.8))
-                        .help(perms.map { "\($0.type): \($0.reason)" }.joined(separator: "\n"))
-                }
                 Image(systemName: "arrow.up.right.square")
                     .font(.system(size: 12))
                     .foregroundColor(.white.opacity(0.35))

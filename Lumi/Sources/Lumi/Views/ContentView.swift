@@ -107,27 +107,12 @@ struct CollapsedView: View {
 
             Spacer()
 
-            // 中间：简要信息
+            // 中间：简要信息（歌手名 + 黄色固定标志 + 歌词 都在这里，固定位置）
             moduleBriefView
                 .padding(.horizontal, 8)
 
             Spacer()
-                .padding(.trailing, 6)
-
-            // 右侧：固定小胶囊按钮（最右端，不挤占歌词/信息区域）
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    AppState.shared.islandPinned.toggle()
-                }
-            } label: {
-                Image(systemName: state.islandPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(state.islandPinned ? .yellow : .white.opacity(0.5))
-                    .frame(width: 16, height: 16)
-            }
-            .buttonStyle(.plain)
-            .help(state.islandPinned ? "取消固定小胶囊" : "固定小胶囊（常驻显示）")
-            .padding(.trailing, 14)
+                .padding(.trailing, 10)
         }
         .frame(height: 42)
         .background(
@@ -242,13 +227,6 @@ struct ExpandedView: View {
                 // 插件区放在模块下方，固定高度上限、内部自行滚动。
                 moduleContentView
                     .frame(maxHeight: .infinity)
-
-                // 插件区：仅当未进入某个插件独立页面时显示（否则会与该插件页面内容叠加）
-                if state.selectedPluginPanelID == nil {
-                    PluginSection()
-                        .frame(maxHeight: 200)
-                        .padding(.bottom, 4)
-                }
 
                 // 底部拖拽指示器
                 RoundedRectangle(cornerRadius: 2)
