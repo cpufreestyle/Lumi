@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import AppKit
 
 // MARK: - TapTap 小游戏模块
 
@@ -56,6 +57,11 @@ struct GameWebView: NSViewRepresentable {
                 self.parent.controller.isLoading = false
                 self.parent.controller.canGoBack = webView.canGoBack
                 if let url = webView.url { self.parent.controller.url = url }
+                // 若当前处于游戏模块的键盘捕获态，页面加载完成后立即把焦点交给 WebView，
+                // 使其能接收键盘（方向键/字母键）控制 H5 小游戏。
+                if AppState.shared.activeModule == .game {
+                    webView.becomeFirstResponder()
+                }
             }
         }
 

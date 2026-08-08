@@ -37,6 +37,14 @@ final class SharedIslandController {
     static var controller: IslandWindowController?
 }
 
+/// 动态岛面板：默认是 nonactivating（不抢焦点、不成为 key window）。
+/// 游戏模块需要接收键盘时，临时把 `wantsKeyboardCapture` 置 true，
+/// 使其能成为 key window 并把键盘事件交给内嵌的 WKWebView；切走即恢复。
+final class IslandPanel: NSPanel {
+    var wantsKeyboardCapture: Bool = false
+    override var canBecomeKey: Bool { wantsKeyboardCapture }
+}
+
 // MARK: - 动态岛窗口控制器
 final class IslandWindowController: NSObject {
     private var window: NSPanel!
@@ -125,7 +133,7 @@ final class IslandWindowController: NSObject {
             userSize = NSSize(width: s[0], height: s[1])
         }
 
-        let panel = NSPanel(
+        let panel = IslandPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -194,6 +202,7 @@ final class IslandWindowController: NSObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] expanded in
                 self?.applyState(expanded: expanded)
+                self?.updateGameKeyboardCapture()
             }
             .store(in: &cancellables)
 
@@ -211,6 +220,7 @@ final class IslandWindowController: NSObject {
             .sink { [weak self] _ in
                 guard let self = self, AppState.shared.isExpanded else { return }
                 self.updateWindowFrame(expanded: true)
+                self.updateGameKeyboardCapture()
             }
             .store(in: &cancellables)
 
@@ -492,6 +502,35 @@ final class IslandWindowController: NSObject {
         let y = screenFrame.maxY - h - 6
 
         window?.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true, animate: true)
+    }
+
+    // MARK: - 游戏键盘捕获
+
+    /// 根据当前状态决定是否让面板接收键盘：
+    /// 仅当「展开态 + 当前模块是游戏」时临时成为 key window，把键盘交给 WKWebView；
+    /// 其余情况恢复 nonactivating 行为（不抢焦点）。
+    private func updateGameKeyboardCapture() {
+        let enabled = AppState.shared.isExpanded && AppState.shared.activeModule == .game
+        setGameKeyboardCapture(enabled)
+    }
+
+    /// 开启/关闭游戏键盘捕获。
+    /// - 开启：让面板可成为 key window 并使其成为 key，再把 WKWebView 设为 first responder，
+    ///   这样网页内的 keydown 监听即可收到方向键/字母键等输入。
+    /// - 关闭：退出 key window，交还焦点。
+    private func setGameKeyboardCapture(_ enabled: Bool) {
+        guard let panel = window as? IslandPanel else { return }
+        panel.wantsKeyboardCapture = enabled
+        if enabled {
+            panel.makeKey()
+            // WKWebView 成为 first responder 后才能稳定接收键盘事件；
+            // 稍微延迟以确保窗口/视图层级已就绪。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                GameController.shared.webView?.becomeFirstResponder()
+            }
+        } else {
+            panel.resignKey()
+        }
     }
 
     /// 手动缩放：基于当前窗口 frame，按拖拽增量调整展开态宽高。
