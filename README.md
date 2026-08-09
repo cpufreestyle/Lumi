@@ -26,6 +26,8 @@ Lumi 支持把**任意第三方 macOS 应用**接入灵动岛面板，形成可�
 
 快速体验：运行仓库内 `make_sample_plugin.sh` 会在 Plugins 目录生成一个示例插件 `.app`，重启 Lumi 后展开面板底部「插件」区即可看到。
 
+**第三方开发者接入指南**：见 [`docs/PLUGIN_SDK.md`](docs/PLUGIN_SDK.md)（L1/L2/L3 三层级、清单字段、面板 JSON、上架市场、30 秒零编译演示）。
+
 ## 插件市场（已落地 · Phase 1）
 
 展开面板底部「插件」区提供两个分段：
