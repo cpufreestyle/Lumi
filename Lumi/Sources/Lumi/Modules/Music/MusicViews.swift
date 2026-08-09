@@ -147,6 +147,7 @@ struct MusicExpandedView: View {
                 Text(music.title.isEmpty ? "未在播放" : music.title)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 1)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
             }
@@ -447,6 +448,7 @@ struct MusicExpandedView: View {
                         // Apple Music 官方歌词（带时间轴）：逐行高亮当前播放行。
                         LyricsSyncView(lines: music.syncedLines,
                                        currentTime: music.currentTime,
+                                       bilingual: music.bilingualMode,
                                        offset: music.lyricsOffset,
                                        baseSize: lyricBaseSize,
                                        activeSize: lyricActiveSize,
@@ -466,11 +468,12 @@ struct MusicExpandedView: View {
                                     .foregroundColor(.white.opacity(0.78))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .lineSpacing(4)
-                                if music.bilingualMode != .off,
-                                   !music.lyricsTranslation.isEmpty {
-                                    Text(music.lyricsTranslation)
+                                if music.bilingualMode != .off {
+                                    Text(music.lyricsTranslation.isEmpty ? "翻译中…" : music.lyricsTranslation)
                                         .font(.system(size: translationSize))
-                                        .foregroundColor(.white.opacity(0.45))
+                                        .foregroundColor(music.lyricsTranslation.isEmpty
+                                                         ? .white.opacity(0.22)
+                                                         : .white.opacity(0.45))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .lineSpacing(3)
                                 }
@@ -478,6 +481,33 @@ struct MusicExpandedView: View {
                             .padding(.vertical, 4)
                         }
                         .frame(maxHeight: lyricAreaHeight)
+                    }
+
+                    // 当前句两排双语展示：中文一行 + 英文一行，垂直居中于歌词区。
+                    // 无论是否带时间轴，都优先从这里拿到「当前行 / 译文」，
+                    // 让展开态始终有一块醒目的居中双语字幕（带时间轴时取当前行，
+                    // 纯文本时回退整段原文+译文）。
+                    if music.bilingualMode != .off, !music.currentLineText.isEmpty {
+                        let zh = music.currentLineText
+                        let en = music.currentTranslationText
+                        VStack(spacing: 6) {
+                            Text(zh)
+                                .font(.system(size: lyricActiveSize, weight: .semibold))
+                                .foregroundColor(.white)
+                                .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 1)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                            Text(en.isEmpty ? "翻译中…" : en)
+                                .font(.system(size: translationSize, weight: .medium))
+                                .foregroundColor(en.isEmpty
+                                                 ? .white.opacity(0.22)
+                                                 : .white.opacity(0.7))
+                                .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 1)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: lyricAreaHeight, alignment: .center)
+                        .padding(.vertical, 4)
                     }
                 }
             } else {
@@ -503,6 +533,8 @@ struct MusicExpandedView: View {
 struct LyricsSyncView: View {
     let lines: [SyncedLine]
     let currentTime: TimeInterval
+    /// 当前双语模式（决定译文占位/隐藏）。
+    var bilingual: MusicController.BilingualMode = .auto
     /// 时间轴校准偏移（秒）。正值表示歌词时间轴比实际播放快，需要把匹配基准往后推。
     var offset: TimeInterval = 0
     /// 字号（由卡片大小自适应传入）：普通行 / 当前高亮行 / 翻译行
@@ -538,11 +570,16 @@ struct LyricsSyncView: View {
                                 )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .lineSpacing(4)
-                            if let tr = line.translation, !tr.isEmpty {
-                                Text(tr)
+                            // 双语模式：每行都预留译文位置，译文缺失时显示占位，
+                            // 翻译到达后自动替换（translation 是 @Published，行会刷新）。
+                            if bilingual != .off {
+                                let tr = line.translation ?? ""
+                                Text(tr.isEmpty ? "翻译中…" : tr)
                                     .font(.system(size: translationSize,
                                                   weight: .regular))
-                                    .foregroundColor(.white.opacity(i == activeIndex ? 0.7 : 0.38))
+                                    .foregroundColor(tr.isEmpty
+                                                     ? .white.opacity(0.22)
+                                                     : .white.opacity(i == activeIndex ? 0.7 : 0.38))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .lineSpacing(3)
                             }
