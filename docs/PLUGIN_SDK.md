@@ -42,7 +42,7 @@
 | `panelHint` | String | 面板提示语 | ⭕ |
 | `minHostVersion` | String | 最低宿主版本（语义化） | ⭕ |
 | `panel` | Bool | `true` 启用 L3 深度集成 | L3 必填 |
-| `version` | String | 语义化版本，用于市场「可更新」判断 | 上架必填 |
+| `version` | String | 语义化版本（如 `1.0.0`），用于市场「可更新」判断**与本地已安装列表展示** | **建议必填**（上架必填） |
 | `category` | String | 市场分类：`工具`/`效率`/`娱乐`/`其它` | 上架必填 |
 | `summary` | String | 一句话简介 | 上架必填 |
 | `downloadURL` | URL | 市场下载地址（仅来自 feed，本地 manifest 一般不含） | 上架必填 |
@@ -58,7 +58,8 @@
   "name": "Bartender",
   "iconName": "menubar.dock.rectangle",
   "urlScheme": "bartender",
-  "appName": "Bartender.app"
+  "appName": "Bartender.app",
+  "version": "1.0.0"
 }
 ```
 
@@ -183,6 +184,7 @@ bash Lumi/demo_panel.sh stop     # 停止并清理面板 JSON
 
 ## 7. 常见问题
 
+- **每个插件都要写版本号吗？** 强烈建议。在 `lumi-plugin.json` 里声明 `version`（如 `"1.0.0"`），Lumi 会在「已安装」列表显示 `v版本号`，市场也会据此判断「可更新」。没写版本号的插件在列表里只显示名称，且无法被更新检测识别。
 - **面板不出现？** 确认 manifest 里 `panel` 为 `true` 且 `id` 与 JSON 文件名一致；重启 Lumi 让它重新扫描。
 - **面板显示「可能已退出」？** 你的进程停止写 JSON 超过 30 秒了，恢复写入即可。
 - **图标是灰色拼图？** `iconName` 填的不是有效 SF Symbol 名，回退到了默认图标。

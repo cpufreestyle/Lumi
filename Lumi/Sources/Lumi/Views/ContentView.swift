@@ -25,16 +25,17 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 悬停预览态：胶囊 + 模块预览
+// MARK: - 悬停预览态：胶囊紧贴动态岛 + 预览内容向下延伸
 struct PeekView: View {
     @ObservedObject private var state = AppState.shared
 
     var body: some View {
         VStack(spacing: 0) {
+            // 胶囊紧贴动态岛（顶部），作为从动态岛延伸出去的起点
+            CollapsedView()
+            // 预览内容从胶囊向下延伸出去，不分离
             PeekPreviewContent()
                 .frame(maxHeight: .infinity)
-            CollapsedView()
-                .padding(.bottom, 6)
         }
         // 鼠标在预览面板（132 高）内移动时，即便离开内部胶囊条也不要收起；
         // 由这里统一维持 isHovering=true，离开整个面板才切回收缩态。
@@ -110,6 +111,9 @@ struct CollapsedView: View {
             // 中间：简要信息（歌手名 + 黄色固定标志 + 歌词 都在这里，固定位置）
             moduleBriefView
                 .padding(.horizontal, 8)
+
+            // 灵动岛状态（菜单栏胶囊条）：点击即检查更新，状态常驻显示
+            DynamicIslandStatusView(tapChecksUpdate: true)
 
             Spacer()
                 .padding(.trailing, 10)
@@ -188,39 +192,19 @@ struct ExpandedView: View {
     @ObservedObject private var pluginPanels = PluginPanelBridge.shared
     @State private var dragOffset: CGFloat = 0
 
-    // 是否正在展示更新浮层（与 UpdateAvailableBanner.shouldShow 条件保持一致）
-    private var showUpdateBanner: Bool {
-        switch updater.status {
-        case .available, .downloading, .readyToInstall, .failed:
-            if let latest = updater.latestVersion,
-               (latest == updater.ignoredVersion || latest == updater.skippedVersion) {
-                return false
-            }
-            return true
-        default:
-            return false
-        }
-    }
-
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
+                // 顶部灵动岛（状态 + 操作都收敛在黑色岛内）
+                DynamicIslandStatusView(expanded: true)
+                    .padding(.top, 12)
+                    .padding(.horizontal, 16)
+
                 // 顶部标签栏
                 TabBarView()
 
-                // 更新提示浮层：作为正常布局行（参与流式排版），
-                // 自然占据顶部空间，下方模块内容不再与之重叠。
-                if showUpdateBanner {
-                    UpdateAvailableBanner()
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .animation(.easeInOut(duration: 0.25), value: showUpdateBanner)
-                }
-
-                // 手动检查反馈条（已是最新 / 失败原因）：与 showUpdateBanner 解耦，
-                // 即使 status == .upToDate（图标变绿）也能看到明确提示。
-                UpdateFeedbackBanner()
-                    .padding(.top, 8)
+                // 更新状态/操作已统一收敛到顶部黑色岛（DynamicIslandStatusView），
+                // 不再在此处重复渲染横幅，避免操作与状态散落面板各处。
 
                 // 模块内容占满剩余高度（不整体包 ScrollView，否则音乐/游戏等
                 // 依赖撑满高度的视图在 ScrollView 内会塌缩为 0 高度导致空白）。
@@ -468,8 +452,7 @@ struct TabBarView: View {
             // 第二行：工具按钮（右对齐，不再遮挡标签）
             HStack(spacing: 6) {
                 Spacer()
-                // 检查更新：点击手动触发，有新版本时图标高亮提示
-                UpdateCheckButton()
+                // 检查更新已收敛到顶部黑色岛，此处仅保留隐藏/退出
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         AppState.shared.islandEnabled = false
@@ -1081,64 +1064,9 @@ struct ResizeHandle: View {
     }
 }
 
-// MARK: - 检查更新按钮（TabBar 右上角）
-struct UpdateCheckButton: View {
-    @ObservedObject private var updater = Updater.shared
-
-    var body: some View {
-        Button(action: {
-            updater.checkForUpdates(force: true)
-        }) {
-            Image(systemName: iconName)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(accentTint)
-                .padding(7)
-                .background(Circle().fill(Color.white.opacity(0.08)))
-                .overlay(
-                    // 检查中转圈
-                    Group {
-                        if case .checking = updater.status {
-                            ProgressView()
-                                .scaleEffect(0.5)
-                                .frame(width: 26, height: 26)
-                        }
-                    }
-                )
-        }
-        .buttonStyle(.plain)
-        .help(helpText)
-    }
-
-    private var iconName: String {
-        switch updater.status {
-        case .available:  return "arrow.down.circle.fill"
-        case .failed:     return "exclamationmark.circle"
-        case .upToDate:   return "checkmark.circle"
-        default:          return "arrow.down.circle"
-        }
-    }
-
-    private var accentTint: Color {
-        switch updater.status {
-        case .available:  return .green
-        case .failed:     return .orange
-        case .upToDate:   return .white.opacity(0.5)
-        default:          return .white.opacity(0.5)
-        }
-    }
-
-    private var helpText: String {
-        switch updater.status {
-        case .available:  return "发现新版本 \(updater.latestVersion ?? "")，点击前往下载"
-        case .upToDate:   return "已是最新版本（\(updater.currentVersion)）"
-        case .failed(let m): return "检查更新失败：\(m)"
-        case .checking:   return "正在检查更新…"
-        default:          return "检查更新"
-        }
-    }
-}
-
 // MARK: - 手动检查反馈条（已是最新 / 失败原因，几秒后自动消失）
+// 注：更新状态与操作已统一收敛到顶部黑色岛（DynamicIslandStatusView），
+// 以下 UpdateFeedbackBanner / UpdateAvailableBanner 两个独立横幅不再渲染，保留定义供后续复用。
 struct UpdateFeedbackBanner: View {
     @ObservedObject private var updater = Updater.shared
 

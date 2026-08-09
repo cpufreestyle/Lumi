@@ -480,7 +480,7 @@ final class IslandWindowController: NSObject {
         // 固定定位到内置屏（带刘海那块）：动态岛只属于主屏，
         // 不跟随鼠标跑到外接显示器上。
         guard let screen = builtInScreen else { return }
-        let screenFrame = screen.visibleFrame
+        let screenFrame = screen.frame
 
         let peeking = AppState.shared.isHovering && !expanded
         // 游戏模块需要更大面板才能直接玩 H5 小游戏，使用专属默认尺寸 480×600；
@@ -497,9 +497,22 @@ final class IslandWindowController: NSObject {
         // 收缩态 CollapsedView 高 42；peek 态 = 预览区 + 胶囊 42 + 底部 6；展开态 480。
         // 收缩/peek 态高度固定，不受手动调整影响。
         let h: CGFloat = expanded ? ((userSize?.height ?? defaultH) + updateBannerExtra) : (peeking ? 132 : 42)
-        // 居中于目标屏幕顶部，紧贴菜单栏下方，避开刘海
+
+        // 关键改动：从动态岛底部开始向下延伸，而非从屏幕顶部可见区域开始。
+        // 这样窗口和胶囊都会从动态岛区域向外延出去，形成视觉上的连接感。
+        let inset = screen.safeAreaInsets
+        let hasNotch = if #available(macOS 12.0, *), inset.top > 0 { true } else { false }
+
         let x = screenFrame.midX - w / 2
-        let y = screenFrame.maxY - h - 6
+        let y: CGFloat
+        if hasNotch {
+            // 有刘海：窗口紧贴动态岛底部（safeAreaInsets.top 就是刘海高度）
+            // 从物理屏幕顶部往下移 notch 高度，再留 2px 间隙让视觉上更自然
+            y = screenFrame.maxY - inset.top - h - 2
+        } else {
+            // 无刘海（旧款机型或外接屏）：回退到原逻辑，距顶部 6px
+            y = screenFrame.maxY - h - 6
+        }
 
         window?.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true, animate: true)
     }

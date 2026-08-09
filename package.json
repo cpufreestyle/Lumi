@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node --test 'test/*.test.js'"
+  },
+  "devDependencies": {
+    "supertest": "^6.3.3"
   },
   "dependencies": {
     "express": "^4.18.2",

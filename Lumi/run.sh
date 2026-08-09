@@ -48,6 +48,15 @@ package() {
   if [ -f "Resources/AppIcon.icns" ]; then
     cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
   fi
+  # SwiftPM 资源包（内含 plugin-feed.json 等）：不拷入 .app 会导致
+  # Bundle.main.url(forResource:) 找不到内置插件清单，市场离线回退失效。
+  if [ -d "$BIN_PATH/Lumi_Lumi.bundle" ]; then
+    cp -R "$BIN_PATH/Lumi_Lumi.bundle" "$APP/Contents/Resources/"
+  fi
+  # 同时平铺一份 plugin-feed.json，兼容直接从 Contents/Resources 读取的路径。
+  if [ -f "Sources/Lumi/Resources/plugin-feed.json" ]; then
+    cp Sources/Lumi/Resources/plugin-feed.json "$APP/Contents/Resources/plugin-feed.json"
+  fi
   xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
   echo "✅ 已打包 $APP"
 }

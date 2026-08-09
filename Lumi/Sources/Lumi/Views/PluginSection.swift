@@ -127,12 +127,14 @@ struct PluginSection: View {
                     Text(plugin.resolvedName)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.92))
-                    if let hint = plugin.panelHint, !hint.isEmpty {
-                        Text(hint).font(.system(size: 9))
+                    let sub = [
+                        plugin.version.map { "v\($0)" },
+                        plugin.panelHint,
+                        plugin.urlScheme.map { "scheme: \($0)://" }
+                    ].compactMap { $0 }.first
+                    if let sub, !sub.isEmpty {
+                        Text(sub).font(.system(size: 9))
                             .foregroundColor(.white.opacity(0.45)).lineLimit(1)
-                    } else if let scheme = plugin.urlScheme, !scheme.isEmpty {
-                        Text("scheme: \(scheme)://").font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.35)).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 4)

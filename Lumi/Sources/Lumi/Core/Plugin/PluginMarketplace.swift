@@ -15,8 +15,8 @@ import Combine
 final class PluginMarketplace: NSObject, ObservableObject {
     static let shared = PluginMarketplace()
 
-    /// 官方源清单地址（可由维护者更新）。
-    private let officialFeedURL = URL(string:
+    /// 官方源清单地址（可由维护者更新）。市场源设置页需展示，故非 private。
+    let officialFeedURL = URL(string:
         "https://raw.githubusercontent.com/cpufreestyle/Lumi/main/Lumi/plugin-feed.json")
 
     /// 市场分类（用于 UI 分段筛选）
@@ -195,9 +195,22 @@ final class PluginMarketplace: NSObject, ObservableObject {
         updatesAvailable = updates
     }
 
+    /// 内置清单可能位于三处：SwiftPM 资源包（Bundle.module）、
+    /// .app/Contents/Resources 平铺副本、或 Resources 子目录。逐一尝试。
+    private var builtinFeedURL: URL? {
+        if let u = Bundle.module.url(forResource: "plugin-feed", withExtension: "json") {
+            return u
+        }
+        if let u = Bundle.main.url(forResource: "plugin-feed", withExtension: "json") {
+            return u
+        }
+        return Bundle.main.url(forResource: "plugin-feed", withExtension: "json",
+                               subdirectory: "Resources")
+    }
+
     /// 回退：从 App 包内 plugin-feed.json 读取（保证离线可演示）
     private func loadLocalFeed() {
-        guard let url = Bundle.main.url(forResource: "plugin-feed", withExtension: "json"),
+        guard let url = builtinFeedURL,
               let data = try? Data(contentsOf: url),
               let feed = try? JSONDecoder().decode(PluginFeed.self, from: data) else {
             DispatchQueue.main.async { self.feedStatus = .failed("无法读取内置插件清单") }

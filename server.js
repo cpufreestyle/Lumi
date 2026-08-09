@@ -270,13 +270,17 @@ app.get('/api/revocations', (req, res) => {
 });
 
 // ============ 启动服务 ============
-app.listen(config.port, () => {
-  const mode = (config.teamId && config.keyId && config.privateKey)
-    ? '✅ Apple MusicKit 已配置' : '⚠️  凭据未配置，可使用演示模式';
-  console.log(`🎵 Lumi 服务已启动: http://localhost:${config.port} (${mode})`);
-  console.log(`   Lumi 已集成付费高级功能:`);
-  console.log(`   - Claude Code 编程助手   (Claude Sonnet 4 API)`);
-  console.log(`   - Codex 代码分析工具     (GPT-4o API)`);
-  console.log(`   - 视频下载 MP4/MP3      (yt-dlp, 1800+ 站点)`);
-  console.log(`   - 未来所有 AI 功能      (永久访问)`);
-});
+if (require.main === module) {
+  app.listen(config.port, () => {
+    const mode = (config.teamId && config.keyId && config.privateKey)
+      ? '✅ Apple MusicKit 已配置' : '⚠️  凭据未配置，可使用演示模式';
+    console.log(`🎵 Lumi 服务已启动: http://localhost:${config.port} (${mode})`);
+    console.log(`   Lumi 已集成付费高级功能:`);
+    console.log(`   - Claude Code 编程助手   (Claude Sonnet 4 API)`);
+    console.log(`   - Codex 代码分析工具     (GPT-4o API)`);
+    console.log(`   - 视频下载 MP4/MP3      (yt-dlp, 1800+ 站点)`);
+    console.log(`   - 未来所有 AI 功能      (永久访问)`);
+  });
+}
+
+module.exports = { app, isValidPEM, validateField, isValidEnvSyntax, escapeEnvValue, FIELD_LIMITS };
