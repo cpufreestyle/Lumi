@@ -530,7 +530,6 @@ final class IslandWindowController: NSObject {
     private func frameFor(expanded: Bool, screen: NSScreen) -> NSRect {
         let screenFrame = screen.frame
 
-        let peeking = AppState.shared.isHovering && !expanded
         // 游戏模块需要更大面板才能直接玩 H5 小游戏，使用专属默认尺寸 480×600；
         // 其他模块维持默认 360×480。用户手动缩放后一律以 userSize 为准。
         let isGame = AppState.shared.activeModule == .game
@@ -566,10 +565,10 @@ final class IslandWindowController: NSObject {
         // 避免它与下方模块内容（如下载卡片）重叠。
         let updateBannerExtra: CGFloat = (expanded && updaterBannerVisible) ? 96 : 0
         // 窗口高度精确等于内容高度，避免窗口比圆角内容大而露出多余的透明外框：
-        // 收缩态贴合物理岛（collapsedH）；peek 态 = 预览区 + 胶囊 + 底部；
-        // 展开态由 userSize/defaultH 决定。收缩/peek 态高度固定，不受手动调整影响。
+        // 收缩态贴合物理岛（collapsedH）；hover 预览态与收缩态保持同一体积（不二次放大），
+        // 仅显示小胶囊本身；展开态由 userSize/defaultH 决定。
         let h: CGFloat = expanded ? ((userSize?.height ?? defaultH) + updateBannerExtra)
-                                  : (peeking ? collapsedH + 120 : collapsedH)
+                                  : collapsedH
 
         let x = screenFrame.midX - w / 2
         let y: CGFloat

@@ -210,10 +210,25 @@ struct CollapsedView: View {
                     .padding(.top, 6)
             }
         }
-        // 右下角胶囊尺寸拖拽手柄：直接拖移改变胶囊宽高。
+        // 右下角：尺寸拖拽手柄 + （常驻时）取消固定按钮，水平并排，互不冲突、不影响居中歌词。
         .overlay(alignment: .bottomTrailing) {
-            CapsuleResizeHandle()
-                .padding(6)
+            HStack(spacing: 2) {
+                if state.islandPinned {
+                    Button(action: {
+                        AppState.shared.islandPinned = false
+                    }) {
+                        Image(systemName: "pin.slash.fill")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.7))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("取消固定（鼠标移开即收起）")
+                }
+                CapsuleResizeHandle()
+            }
+            .padding(5)
         }
     }
 
