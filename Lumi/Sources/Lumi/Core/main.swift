@@ -69,6 +69,10 @@ final class IslandWindowController: NSObject {
     private let externalHotZoneHeight: CGFloat = 4
     private let externalHotZoneWidth: CGFloat = 160
 
+    /// 收缩态黑岛宽度/高度上限：跟随 AppState.capsuleSize（用户可在设置中调节），
+    /// 不再写死常量，让胶囊尺寸真正由用户自定义。
+    /// 高度同时取物理刘海高度与该值的较大值，保证歌词不被裁切。
+
     /// 鼠标移出后延迟隐藏（秒）。基础值较短，避免普遍影响面板下方其他交互。
     private let hideDelay: TimeInterval = 0.6
     /// 音乐播放时收缩态小胶囊（含歌词）额外停留，让用户有时间看清歌词；
@@ -259,6 +263,15 @@ final class IslandWindowController: NSObject {
                 self.updateWindowFrame(expanded: AppState.shared.isExpanded)
             }
             .store(in: &cancellables)
+
+        // 胶囊尺寸被用户调节时，立即重排收缩态窗口 frame。
+        AppState.shared.$capsuleSize
+            .receive(on: RunLoop.main)
+            .sink(receiveValue: { [weak self] _ in
+                guard let self = self else { return }
+                self.updateWindowFrame(expanded: AppState.shared.isExpanded)
+            })
+            .store(in: &cancellables)
     }
 
     /// 计算某块屏幕的"动态岛"热区矩形。
@@ -294,8 +307,8 @@ final class IslandWindowController: NSObject {
         let inset = screen.safeAreaInsets
         // 刘海高度：顶边到安全区顶部的距离
         let notchH = max(inset.top, 18)
-        // 刘海宽度：左右安全区之和（刘海真实宽度）；太窄时兜底到 320
-        let notchW = max(inset.left + inset.right, 240)
+        // 刘海宽度 = 整屏宽 - 左右安全区（刘海两侧留白），而非安全区之和
+        let notchW = max(0, frame.width - inset.left - inset.right)
         let zoneX = frame.midX - notchW / 2
         // y：从屏幕顶边往下 notchH（刘海占据整条顶部）
         let zoneY = frame.maxY - notchH
@@ -370,13 +383,29 @@ final class IslandWindowController: NSObject {
     private func showIsland() {
         guard let panel = window else { return }
         updateWindowFrame(expanded: false)
+        panel.alphaValue = 0
         // orderFrontRegardless 不受应用激活状态/窗口层级限制，确保一定能显示
         panel.orderFrontRegardless()
         panel.makeKey()
+        // 一比一模仿 NotchAI：靠近刘海时淡入，而非硬弹出
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
     }
 
     private func hideIsland() {
-        window?.orderOut(nil)
+        guard let panel = window else { return }
+        // 淡出后再从屏幕移除，避免硬消失穿帮
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+        })
     }
 
     // MARK: - 菜单栏图标（不依赖辅助功能权限的常驻入口）
@@ -474,12 +503,31 @@ final class IslandWindowController: NSObject {
     }
 
     func updateWindowFrame(expanded: Bool) {
-        // 拖拽缩放进行中：保持当前窗口 frame，不要用 userSize 重置，
-        // 否则手柄拖拽会被 isHovering 触发的本函数立即覆盖掉。
-        guard !isResizing else { return }
+        // 拖拽缩放进行中：用轻量弹簧动画平滑跟手，避免硬跳变；
+        // 但仍保持当前窗口 frame 不被 userSize 重置（否则会被 isHovering 触发覆盖）。
+        if isResizing {
+            guard let screen = builtInScreen else { return }
+            let target = self.frameFor(expanded: expanded, screen: screen)
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.12
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.window?.animator().setFrame(target, display: true)
+            })
+            return
+        }
         // 固定定位到内置屏（带刘海那块）：动态岛只属于主屏，
         // 不跟随鼠标跑到外接显示器上。
         guard let screen = builtInScreen else { return }
+        let frame = frameFor(expanded: expanded, screen: screen)
+        // 收缩/预览态（胶囊变形）瞬间定位、不做动画，避免胶囊在宽度/高度变化中
+        // 一边重绘一边形变而闪烁；展开态保留平滑动画。
+        let animate = expanded
+        window?.setFrame(frame, display: true, animate: animate)
+    }
+
+    /// 根据展开状态与屏幕计算窗口目标 frame（含刘海贴合、用户尺寸、预览态等逻辑）。
+    /// 拖拽缩放期间也复用同一计算，保证缩放后的窗口位置/对齐一致。
+    private func frameFor(expanded: Bool, screen: NSScreen) -> NSRect {
         let screenFrame = screen.frame
 
         let peeking = AppState.shared.isHovering && !expanded
@@ -489,32 +537,55 @@ final class IslandWindowController: NSObject {
         let defaultW: CGFloat = isGame ? 480 : 360
         let defaultH: CGFloat = isGame ? 600 : 480
         // 展开态尺寸优先用用户手动调整后的尺寸，否则用模块专属默认值
-        let w: CGFloat = expanded ? (userSize?.width ?? defaultW) : 320
+        // 收缩态尺寸：1:1 贴合物理岛（刘海）本体——
+        // 宽取刘海真实宽度（左右安全区之和 = inset.left + inset.right），
+        // 高取刘海高度（inset.top）。不额外兜底放大，否则会和真刘海尺寸不一致。
+        // 让黑岛与真刘海做到像素级 1:1 重合；无刘海回退为顶部一条 320×42 横条。
+        let collapsedW: CGFloat
+        let collapsedH: CGFloat
+        let inset = screen.safeAreaInsets
+        let hasNotch = if #available(macOS 12.0, *), inset.top > 0 { true } else { false }
+        if hasNotch {
+            // 刘海宽度 = 整屏宽 - 左右安全区（刘海两侧留白），而非安全区之和；
+            // 刘海高度 = 安全区顶部距离（inset.top）。
+            // 但收缩态黑岛不取满刘海全宽——过宽会挤压其他软件的菜单栏 UI，
+            // 因此限制一个最大宽度（默认 360pt），居中贴合刘海底，
+            // 既保留「黑岛」观感，又不占满刘海两侧。
+            let fullNotchW = max(0, screenFrame.width - inset.left - inset.right)
+            collapsedW = min(fullNotchW, AppState.shared.capsuleSize.width)
+            // 高度取物理刘海高度与用户设定胶囊高度的较大值，
+            // 保证双语歌词完整显示、不被窗口裁切。
+            collapsedH = max(inset.top, AppState.shared.capsuleSize.height)
+        } else {
+            collapsedW = 320
+            collapsedH = 42
+        }
+
+        let w: CGFloat = expanded ? (userSize?.width ?? defaultW) : collapsedW
         // 更新可用浮层出现时，给展开面板额外增加高度，把浮层放在顶部独立区域，
         // 避免它与下方模块内容（如下载卡片）重叠。
         let updateBannerExtra: CGFloat = (expanded && updaterBannerVisible) ? 96 : 0
         // 窗口高度精确等于内容高度，避免窗口比圆角内容大而露出多余的透明外框：
-        // 收缩态 CollapsedView 高 42；peek 态 = 预览区 + 胶囊 42 + 底部 6；展开态 480。
-        // 收缩/peek 态高度固定，不受手动调整影响。
-        let h: CGFloat = expanded ? ((userSize?.height ?? defaultH) + updateBannerExtra) : (peeking ? 132 : 42)
-
-        // 关键改动：从动态岛底部开始向下延伸，而非从屏幕顶部可见区域开始。
-        // 这样窗口和胶囊都会从动态岛区域向外延出去，形成视觉上的连接感。
-        let inset = screen.safeAreaInsets
-        let hasNotch = if #available(macOS 12.0, *), inset.top > 0 { true } else { false }
+        // 收缩态贴合物理岛（collapsedH）；peek 态 = 预览区 + 胶囊 + 底部；
+        // 展开态由 userSize/defaultH 决定。收缩/peek 态高度固定，不受手动调整影响。
+        let h: CGFloat = expanded ? ((userSize?.height ?? defaultH) + updateBannerExtra)
+                                  : (peeking ? collapsedH + 120 : collapsedH)
 
         let x = screenFrame.midX - w / 2
         let y: CGFloat
         if hasNotch {
-            // 有刘海：窗口紧贴动态岛底部（safeAreaInsets.top 就是刘海高度）
-            // 从物理屏幕顶部往下移 notch 高度，再留 2px 间隙让视觉上更自然
-            y = screenFrame.maxY - inset.top - h - 2
+            // 所有 UI 都「避开刘海像素区」：窗口从刘海底边（safeAreaInsets.top 之下）
+            // 开始向下延伸，绝不覆盖刘海本身。
+            // - 收缩态：黑岛紧贴刘海底，宽度=刘海宽，像刘海的延伸；
+            // - 展开/预览态：从同一刘海底边向下 + 左右长开，形状与位置都基于刘海。
+            // 隐藏时收回到刘海边界之后（由 scheduleHide 淡出），不占用刘海区域。
+            y = screenFrame.maxY - inset.top - h
         } else {
             // 无刘海（旧款机型或外接屏）：回退到原逻辑，距顶部 6px
             y = screenFrame.maxY - h - 6
         }
 
-        window?.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true, animate: true)
+        return NSRect(x: x, y: y, width: w, height: h)
     }
 
     // MARK: - 游戏键盘捕获

@@ -51,10 +51,6 @@ struct PeekPreviewContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(state.activeModule.rawValue, systemImage: state.activeModule.icon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white.opacity(0.7))
-
             switch state.activeModule {
             case .music:          MusicPeekView()
             case .calendar:       Text("今日日程预览").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
@@ -70,6 +66,8 @@ struct PeekPreviewContent: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -78,15 +76,19 @@ struct MusicPeekView: View {
     @ObservedObject private var music = MusicController.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .center, spacing: 5) {
             Text(music.title.isEmpty ? "未在播放" : music.title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white)
+                .font(.system(size: 24, weight: .medium))
+                .foregroundColor(.red)
+                .shadow(color: .black.opacity(0.7), radius: 3, x: 0, y: 1)
                 .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .center)
             Text(music.artist.isEmpty ? "打开音乐 App" : music.artist)
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.55))
+                .font(.system(size: 18))
+                .foregroundColor(.red)
+                .shadow(color: .black.opacity(0.7), radius: 3, x: 0, y: 1)
                 .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .center)
             if music.duration > 0 {
                 ProgressView(value: min(1, music.currentTime / music.duration))
                     .progressViewStyle(LinearProgressViewStyle(tint: Color.pink))
@@ -99,63 +101,128 @@ struct MusicPeekView: View {
 // MARK: - 收缩态：胶囊条
 struct CollapsedView: View {
     @ObservedObject private var state = AppState.shared
+    @ObservedObject private var music = MusicController.shared
+
+    /// 胶囊固定高度，跟随 AppState.capsuleSize.height（可由用户调节）。
+    static var capsuleHeight: CGFloat { AppState.shared.capsuleSize.height }
 
     var body: some View {
-        HStack(spacing: 0) {
-            // 左侧：当前模块图标
-            moduleIconView
-                .padding(.leading, 14)
-
-            Spacer()
-
-            // 中间：简要信息（歌手名 + 黄色固定标志 + 歌词 都在这里，固定位置）
-            moduleBriefView
-                .padding(.horizontal, 8)
-
-            // 灵动岛状态（菜单栏胶囊条）：点击即检查更新，状态常驻显示
-            DynamicIslandStatusView(tapChecksUpdate: true)
-
-            Spacer()
-                .padding(.trailing, 10)
-        }
-        .frame(height: 42)
-        .background(
-            RoundedRectangle(cornerRadius: 21)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 21)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+        // 双语上下并排：原文（上，红） + 译文（下，青）。无译文时只显示一行原文。
+        // 高度完全由内容决定：单行就单行高，双行就双行高，绝不浪费空间、绝不裁切译文。
+        // 用户设定的 capsuleSize.height 仅作单行时的最小高度兜底。
+        VStack(alignment: .center, spacing: AppState.shared.lyricLineSpacing) {
+            if state.activeModule == .music, music.playbackState == .playing {
+                MarqueeText(
+                    text: lyricLine,
+                    font: .system(size: 22, weight: .medium),
+                    textColor: .red,
+                    speed: 40,
+                    pause: 1.2
                 )
+                .frame(maxWidth: .infinity, alignment: .center)
+                // 双语模式且译文就绪：紧贴下方追加青色译文行（上下并排成组）
+                if music.bilingualMode != .off {
+                    let tr = music.currentTranslationText
+                    if !tr.isEmpty {
+                        MarqueeText(
+                            text: tr,
+                            font: .system(size: 16, weight: .regular),
+                            textColor: .cyan,
+                            speed: 36,
+                            pause: 1.2
+                        )
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .offset(state.lyricOffset)
+        .frame(maxWidth: .infinity)
+        // 单行时高度回落到用户设定下限（避免歌名过扁）；双行时内容自然撑高，不裁切。
+        // 高度由内容居中填充整个胶囊：无论 capsuleSize.height 怎么调，歌词都垂直居中，
+        // 底部不留固定空白（移除原 .padding(.bottom,14)，否则胶囊越高底部越空）。
+        .frame(minHeight: Self.capsuleHeight, alignment: .center)
+        // 拖拽缩放胶囊宽/高时，用轻量弹簧让内容与窗口平滑跟手（更丝滑）。
+        .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.85), value: state.capsuleSize)
+        // 收缩态黑岛：纯黑无缝矩形（圆角），与真刘海同宽同高，
+        // 不画描边/阴影（否则会在刘海接缝处露出"双层黑"，破坏融为一体的观感）。
+        .background(
+            RoundedRectangle(cornerRadius: 18).fill(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0.0),
+                        .init(color: .black, location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
         )
-        .shadow(color: .black.opacity(0.3), radius: 15, y: 5)
-        // 只有鼠标真正进入收缩胶囊（42 高那条）才标记 isHovering，
+        // 只有鼠标真正进入收缩黑岛（物理岛高度那条）才标记 isHovering，
         // 从而展开预览；整窗 onHover 会在靠近顶部热区时误触发，所以不挂在那里。
-        .contentShape(RoundedRectangle(cornerRadius: 21))
+        .contentShape(RoundedRectangle(cornerRadius: 18))
         .onHover { inside in
             AppState.shared.isHovering = inside
         }
-        .onTapGesture {
+        // 双击重置歌词偏移（长按拖移调节后一键归位）
+        .onTapGesture(count: 2) {
+            AppState.shared.resetLyricOffset()
+        }
+        // 单击展开面板（调节态下不触发，避免误触）
+        .onTapGesture(count: 1) {
+            if AppState.shared.isTuningLyric { return }
             withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                 AppState.shared.isExpanded = true
             }
         }
+        // 长按进入「歌词微调」态，之后拖移实时改变歌词位置；松手退出并保存。
+        .gesture(
+            LongPressGesture(minimumDuration: 0.35)
+                .onEnded { _ in
+                    tuneBase = AppState.shared.lyricOffset
+                    AppState.shared.isTuningLyric = true
+                }
+                .simultaneously(with: DragGesture()
+                    .onChanged { v in
+                        guard AppState.shared.isTuningLyric else { return }
+                        let raw = CGSize(
+                            width: tuneBase.width + v.translation.width,
+                            height: tuneBase.height + v.translation.height
+                        )
+                        // 钳制偏移，确保歌词始终落在胶囊内部
+                        AppState.shared.lyricOffset = AppState.shared.clampLyricOffset(raw)
+                    }
+                    .onEnded { _ in
+                        AppState.shared.isTuningLyric = false
+                    }
+                )
+        )
+        // 调节态提示条：让用户知道当前在拖移微调，双击可重置。
+        .overlay(alignment: .top) {
+            if state.isTuningLyric {
+                Text("拖移调整歌词位置 · 双击重置")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.6)))
+                    .padding(.top, 6)
+            }
+        }
+        // 右下角胶囊尺寸拖拽手柄：直接拖移改变胶囊宽高。
+        .overlay(alignment: .bottomTrailing) {
+            CapsuleResizeHandle()
+                .padding(6)
+        }
     }
 
-    var moduleIconView: some View {
-        Image(systemName: state.activeModule.icon)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundColor(.white)
-            .frame(width: 26, height: 26)
-            .background(
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.pink, Color.purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-            )
+    /// 拖移微调时的偏移基准（长按进入时记录，拖动在此基础上累加）。
+    @State private var tuneBase: CGSize = .zero
+
+    /// 胶囊岛内展示的歌词行：优先同步歌词当前行，缺失时回退到歌名。
+    private var lyricLine: String {
+        music.currentLineText.isEmpty ? music.title : music.currentLineText
     }
 
     @ViewBuilder
@@ -191,20 +258,17 @@ struct ExpandedView: View {
     // 插件面板数据在 PluginPanelBridge.shared 上，需直接观察才能随轮询刷新
     @ObservedObject private var pluginPanels = PluginPanelBridge.shared
     @State private var dragOffset: CGFloat = 0
+    /// 展开爆开动画：从刘海（顶部）缩放弹入，模仿 NotchAI「砰」地长出来的感觉
+    @State private var appear = false
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                // 顶部灵动岛（状态 + 操作都收敛在黑色岛内）
-                DynamicIslandStatusView(expanded: true)
-                    .padding(.top, 12)
-                    .padding(.horizontal, 16)
-
                 // 顶部标签栏
                 TabBarView()
 
-                // 更新状态/操作已统一收敛到顶部黑色岛（DynamicIslandStatusView），
-                // 不再在此处重复渲染横幅，避免操作与状态散落面板各处。
+                // 更新状态/操作已收敛到收缩态刘海黑岛，
+                // 展开态面板顶部不再保留黑色状态条，保持面板顶部简洁。
 
                 // 模块内容占满剩余高度（不整体包 ScrollView，否则音乐/游戏等
                 // 依赖撑满高度的视图在 ScrollView 内会塌缩为 0 高度导致空白）。
@@ -222,11 +286,13 @@ struct ExpandedView: View {
             .background(
                 RoundedRectangle(cornerRadius: 22)
                     .fill(.ultraThinMaterial)
+                    .overlay(Color.black.opacity(0.85))
                     .overlay(
                         RoundedRectangle(cornerRadius: 22)
                             .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
                     )
             )
+            .clipShape(RoundedRectangle(cornerRadius: 22))
             .shadow(color: .black.opacity(0.4), radius: 25, y: 8)
             .gesture(
                 DragGesture()
@@ -256,10 +322,28 @@ struct ExpandedView: View {
             if state.showLicensePanel {
                 licensePanelOverlay
             }
+
+            // 歌词与胶囊设置弹层
+            if state.showLyricTuning {
+                LyricTuningPanel()
+            }
         }
         .offset(y: dragOffset)
+        // 展开爆开动画：从刘海（顶部中心）缩放弹入 + 淡入，
+        // 与窗口「从刘海顶边向四周扩散」的定位配合，形成「从岛里长出来」的感觉。
+        .scaleEffect(appear ? 1 : 0.9, anchor: .top)
+        .opacity(appear ? 1 : 0)
+        .animation(.spring(response: 0.45, dampingFraction: 0.72), value: appear)
         .animation(.easeInOut(duration: 0.25), value: state.showLicensePanel)
+        .animation(.easeInOut(duration: 0.25), value: state.showLyricTuning)
         .onAppear {
+            appear = false
+            // 下一帧触发弹入，确保初始态(0.9/透明)已布局
+            DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.72)) {
+                    appear = true
+                }
+            }
             // 展开时通知窗口调整大小
             NotificationCenter.default.post(name: .islandDidExpand, object: nil)
         }
@@ -452,6 +536,18 @@ struct TabBarView: View {
             // 第二行：工具按钮（右对齐，不再遮挡标签）
             HStack(spacing: 6) {
                 Spacer()
+                // 歌词与胶囊设置
+                Button(action: {
+                    AppState.shared.showLyricTuning.toggle()
+                }) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(7)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .help("歌词与胶囊设置")
                 // 检查更新已收敛到顶部黑色岛，此处仅保留隐藏/退出
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -524,7 +620,7 @@ struct PremiumLockOverlay: View {
     var body: some View {
         ZStack {
             // 毛玻璃效果背景
-            Rectangle()
+            RoundedRectangle(cornerRadius: 16)
                 .fill(.ultraThinMaterial)
                 .overlay(Color.black.opacity(0.6))
 
@@ -1291,4 +1387,158 @@ struct UpdateAvailableBanner: View {
         }
     }
 
+}
+
+// MARK: - 歌词与胶囊设置弹层
+/// 展开面板内点「slider.horizontal.3」打开，提供行间距 / 胶囊宽 / 胶囊高 三个滑块，
+/// 实时生效并持久化（值存于 AppState，已写 UserDefaults）。
+struct LyricTuningPanel: View {
+    @ObservedObject private var state = AppState.shared
+
+    var body: some View {
+        ZStack {
+            // 半透明遮罩，点击空白处关闭
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .onTapGesture { state.showLyricTuning = false }
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("歌词与胶囊")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Button(action: { state.showLyricTuning = false }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // 行间距
+                tuningRow(
+                    title: "歌词行间距",
+                    value: state.lyricLineSpacing,
+                    range: 0...20,
+                    step: 1,
+                    format: "%.0f pt"
+                ) { state.lyricLineSpacing = $0 }
+
+                // 胶囊宽度
+                tuningRow(
+                    title: "胶囊宽度",
+                    value: state.capsuleSize.width,
+                    range: 280...900,
+                    step: 10,
+                    format: "%.0f pt"
+                ) { state.capsuleSize.width = $0 }
+
+                // 胶囊高度
+                tuningRow(
+                    title: "胶囊高度",
+                    value: state.capsuleSize.height,
+                    range: 60...260,
+                    step: 5,
+                    format: "%.0f pt"
+                ) { state.capsuleSize.height = $0 }
+
+                // 重置
+                HStack {
+                    Spacer()
+                    Button(action: { state.resetLyricTuning() }) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("恢复默认")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(Color.pink.opacity(0.85)))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+            }
+            .padding(20)
+            .frame(width: 320)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(.ultraThinMaterial)
+                    .overlay(Color.black.opacity(0.9))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+            )
+            .shadow(color: .black.opacity(0.5), radius: 25, y: 10)
+        }
+    }
+
+    private func tuningRow(
+        title: String,
+        value: CGFloat,
+        range: ClosedRange<CGFloat>,
+        step: CGFloat,
+        format: String,
+        onChanged: @escaping (CGFloat) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.8))
+                Spacer()
+                Text(String(format: format, value))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(width: 56, alignment: .trailing)
+            }
+            Slider(value: Binding(
+                get: { value },
+                set: { onChanged($0) }
+            ), in: range, step: step)
+            .tint(.pink)
+        }
+    }
+}
+
+// MARK: - 胶囊尺寸拖拽手柄
+/// 收缩态胶囊右下角的缩放手柄：拖拽实时改变 AppState.capsuleSize（宽/高），
+/// 窗口控制器已订阅 capsuleSize 变化并即时重排窗口 frame；松手即持久化。
+/// 手柄手势挂在自身，不与「长按拖移歌词」整胶囊手势冲突。
+struct CapsuleResizeHandle: View {
+    @ObservedObject private var state = AppState.shared
+    @State private var lastTranslation: CGSize = .zero
+    @State private var dragging = false
+
+    private let minW: CGFloat = 280, maxW: CGFloat = 900
+    private let minH: CGFloat = 60,  maxH: CGFloat = 260
+
+    var body: some View {
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(.white.opacity(dragging ? 0.75 : 0.35))
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture()
+                    .onChanged { v in
+                        let delta = CGSize(
+                            width: v.translation.width - lastTranslation.width,
+                            height: v.translation.height - lastTranslation.height
+                        )
+                        lastTranslation = v.translation
+                        dragging = true
+                        // 右下角手柄：向右下拖 = 增大。宽度随 dx，高度随 -dy（向下 dy 为正，增大高度）。
+                        let newW = min(maxW, max(minW, state.capsuleSize.width + delta.width))
+                        let newH = min(maxH, max(minH, state.capsuleSize.height + delta.height))
+                        state.capsuleSize = CGSize(width: newW, height: newH)
+                        // 胶囊缩小后，若歌词偏移已越界则同步钳制，保证歌词仍在胶囊内
+                        state.lyricOffset = state.clampLyricOffset(state.lyricOffset)
+                    }
+                    .onEnded { _ in
+                        lastTranslation = .zero
+                        dragging = false
+                    }
+            )
+    }
 }

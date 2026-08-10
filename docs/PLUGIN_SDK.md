@@ -117,7 +117,7 @@ Lumi 每 **1 秒**轮询 `~/Library/Application Support/Lumi/PluginPanels/`，�
 
 用户点面板里的 `button` 时，Lumi 会向你的 `urlScheme` 发：
 
-```
+```text
 myweather://action?name=<按钮标题>
 ```
 
@@ -149,6 +149,7 @@ Lumi 启动时扫描以下位置，读取每个 `.app` 内的 `lumi-plugin.json`
 
 1. 把你的 app 打包成 `YourPlugin.app.zip`。
 2. 在一个可公开访问的 feed（`plugin-feed.json` 同结构）里加一条：
+
    ```json
    {
      "id": "com.example.weather",
@@ -160,6 +161,7 @@ Lumi 启动时扫描以下位置，读取每个 `.app` 内的 `lumi-plugin.json`
      "permissions": [{ "type": "network", "reason": "获取天气数据" }]
    }
    ```
+
 3. 用户在自己 Lumi 的「市场源」设置里添加你的 feed 地址即可（官方源恒开，社区源/自定义源用户可控）。
    - 也可以把条目提交给官方 feed（仓库 `Lumi/plugin-feed.json`），经审核后进入官方源。
 

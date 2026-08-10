@@ -5,6 +5,9 @@ import SwiftUI
 struct MarqueeText: View {
     let text: String
     let font: Font
+    /// 文本颜色。默认白色；收缩态双语歌词需传 .red(原文)/.cyan(译文) 以区分，
+    /// 否则会被内部 Text 的白色覆盖，外部 .foregroundColor 修饰无效。
+    var textColor: Color = .white
     /// 滚动速度：每列歌词在屏幕上移动的像素速度。恒定值保证不同长度歌词速度一致。
     var speed: Double = 40
     /// 一次滚动结束后停顿时长
@@ -18,10 +21,10 @@ struct MarqueeText: View {
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            ZStack(alignment: .leading) {
+            ZStack(alignment: Alignment(horizontal: .leading, vertical: .center)) {
                 Text(text)
                     .font(font)
-                    .foregroundColor(.white)
+                    .foregroundColor(textColor)
                     .lineLimit(1)
                     .fixedSize()
                     .background(
@@ -102,21 +105,21 @@ struct MusicExpandedView: View {
     // 卡片放大时字变大、缩小时字变小，始终与卡片尺寸协调。
     private var lyricBaseSize: CGFloat {
         let w = max(280, min(viewSize.width, 520))
-        // 放大歌词基础字号：基准 360 宽 → 19pt（原 17），上限提到 26
-        return min(26, max(17, 19 * (w / 360)))
+        // 放大歌词基础字号：基准 360 宽 → 22pt，上限提到 30
+        return min(30, max(19, 22 * (w / 360)))
     }
     private var lyricActiveSize: CGFloat { lyricBaseSize + 3 }
     private var translationSize: CGFloat {
         let w = max(280, min(viewSize.width, 520))
-        return min(20, max(14, 16 * (w / 360)))
+        return min(23, max(15, 18 * (w / 360)))
     }
     // 歌词区高度随卡片高度比例自适应（卡片越高，可展示的歌词越多）。
     // 已移除顶部音频频谱可视化，把原频谱占用的空间（约 40pt）补偿给歌词区，
     // 让歌词区更舒展、不再留白。整体尽量撑大：基准映射到更高区间。
     private var lyricAreaHeight: CGFloat {
         let h = max(360, min(viewSize.height, 720))
-        // 360→180，720→360 线性映射（尽量撑大歌词区）
-        return min(380, max(160, 180 + (h - 360) / (720 - 360) * (360 - 180)))
+        // 360→220，720→420 线性映射（歌词区尽可能撑大）
+        return min(420, max(200, 220 + (h - 360) / (720 - 360) * (420 - 220)))
     }
     // 专辑封面随卡片宽度等比缩放：基准 360 宽 → 160，夹在 120–240。
     private var artworkSize: CGFloat {
@@ -450,9 +453,9 @@ struct MusicExpandedView: View {
                                        currentTime: music.currentTime,
                                        bilingual: music.bilingualMode,
                                        offset: music.lyricsOffset,
-                                       baseSize: lyricBaseSize,
-                                       activeSize: lyricActiveSize,
-                                       translationSize: translationSize) { delta in
+                                       baseSize: lyricBaseSize * 0.78,
+                                       activeSize: lyricActiveSize * 0.78,
+                                       translationSize: translationSize * 0.78) { delta in
                             // 一键对齐：用户点击「当前在唱」的那行，反推 offset 并夹在 ±10s
                             var v = delta
                             v = max(-10, min(10, v))
@@ -465,15 +468,15 @@ struct MusicExpandedView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(music.lyrics)
                                     .font(.system(size: lyricBaseSize))
-                                    .foregroundColor(.white.opacity(0.78))
+                                    .foregroundColor(.white)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .lineSpacing(4)
                                 if music.bilingualMode != .off {
                                     Text(music.lyricsTranslation.isEmpty ? "翻译中…" : music.lyricsTranslation)
                                         .font(.system(size: translationSize))
                                         .foregroundColor(music.lyricsTranslation.isEmpty
-                                                         ? .white.opacity(0.22)
-                                                         : .white.opacity(0.45))
+                                                         ? .cyan.opacity(0.3)
+                                                         : .cyan.opacity(0.75))
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .lineSpacing(3)
                                 }
@@ -493,18 +496,18 @@ struct MusicExpandedView: View {
                         VStack(spacing: 6) {
                             Text(zh)
                                 .font(.system(size: lyricActiveSize, weight: .semibold))
-                                .foregroundColor(.white)
+                                .foregroundColor(.red)
                                 .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 1)
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity, alignment: .center)
-                            Text(en.isEmpty ? "翻译中…" : en)
-                                .font(.system(size: translationSize, weight: .medium))
-                                .foregroundColor(en.isEmpty
-                                                 ? .white.opacity(0.22)
-                                                 : .white.opacity(0.7))
-                                .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 1)
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: .infinity, alignment: .center)
+                            if !en.isEmpty {
+                                Text(en)
+                                    .font(.system(size: translationSize, weight: .medium))
+                                    .foregroundColor(.cyan)
+                                    .shadow(color: .black.opacity(0.6), radius: 4, x: 0, y: 1)
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            }
                         }
                         .frame(maxWidth: .infinity, maxHeight: lyricAreaHeight, alignment: .center)
                         .padding(.vertical, 4)
@@ -559,28 +562,28 @@ struct LyricsSyncView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .center, spacing: 7) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
-                        VStack(alignment: .leading, spacing: 3) {
+                        // 双语并排组：原文（上）+ 译文（下）上下紧贴，成对成组显示
+                        VStack(alignment: .center, spacing: 1) {
                             Text(line.text)
                                 .font(.system(size: i == activeIndex ? activeSize : baseSize,
                                               weight: i == activeIndex ? .semibold : .regular))
                                 .foregroundColor(
-                                    i == activeIndex ? Color.pink : .white.opacity(0.5)
+                                    i == activeIndex ? Color.red : .white.opacity(0.5)
                                 )
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .multilineTextAlignment(.center)
                                 .lineSpacing(4)
                             // 双语模式：每行都预留译文位置，译文缺失时显示占位，
                             // 翻译到达后自动替换（translation 是 @Published，行会刷新）。
-                            if bilingual != .off {
-                                let tr = line.translation ?? ""
-                                Text(tr.isEmpty ? "翻译中…" : tr)
+                            if bilingual != .off, let tr = line.translation, !tr.isEmpty {
+                                Text(tr)
                                     .font(.system(size: translationSize,
                                                   weight: .regular))
-                                    .foregroundColor(tr.isEmpty
-                                                     ? .white.opacity(0.22)
-                                                     : .white.opacity(i == activeIndex ? 0.7 : 0.38))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .foregroundColor(.cyan.opacity(i == activeIndex ? 1.0 : 0.5))
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .multilineTextAlignment(.center)
                                     .lineSpacing(3)
                             }
                         }
@@ -597,7 +600,7 @@ struct LyricsSyncView: View {
                 }
                 .padding(.horizontal, 4)
             }
-            .frame(maxHeight: 140)
+            .frame(maxHeight: .infinity)
             // 当前行变化时平滑滚动到它（居中），仅在播放且确有时间轴时进行
             .onChange(of: activeIndex) { newIndex in
                 guard let newIndex = newIndex else { return }

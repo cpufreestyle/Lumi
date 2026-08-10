@@ -71,6 +71,10 @@ final class AppState: ObservableObject {
     @Published var activeModule: AppModule = .music
     @Published var isExpanded: Bool = false
 
+    static let lyricOffsetKey = "lumi_lyric_offset"
+    static let lyricSpacingKey = "lumi_lyric_spacing"
+    static let capsuleSizeKey = "lumi_capsule_size"
+
     /// 动态岛是否悬浮显示（鼠标悬停时展开）
     @Published var isHovering: Bool = false
 
@@ -93,6 +97,71 @@ final class AppState: ObservableObject {
     /// 展开面板是否正在被手动缩放（拖拽右下角手柄中）。
     /// 用于缩放期间冻结歌词区字号/尺寸的重排，避免每帧重建几十行歌词导致卡顿。
     @Published var isResizing: Bool = false
+
+    /// 收缩态胶囊内歌词的细微偏移（由用户在胶囊上长按拖移调节），
+    /// 持久化到 UserDefaults，重启后保留。x=水平、y=垂直（向下为正）。
+    @Published var lyricOffset: CGSize = {
+        guard let arr = UserDefaults.standard.array(forKey: AppState.lyricOffsetKey) as? [CGFloat],
+              arr.count == 2 else { return .zero }
+        return CGSize(width: arr[0], height: arr[1])
+    }() {
+        didSet {
+            UserDefaults.standard.set([lyricOffset.width, lyricOffset.height],
+                                      forKey: AppState.lyricOffsetKey)
+        }
+    }
+
+    /// 是否正在拖移调节歌词位置（长按进入），用于显示提示条。
+    @Published var isTuningLyric: Bool = false
+
+    /// 是否显示「歌词与胶囊」设置弹层（展开面板内点按打开）。
+    @Published var showLyricTuning: Bool = false
+
+    func resetLyricOffset() {
+        lyricOffset = .zero
+    }
+
+    /// 收缩态胶囊内歌词两行的间距（由用户在设置中调节），持久化。
+    @Published var lyricLineSpacing: CGFloat = {
+        UserDefaults.standard.object(forKey: AppState.lyricSpacingKey).map { $0 as? CGFloat ?? 0 } ?? 0
+    }() {
+        didSet { UserDefaults.standard.set(lyricLineSpacing, forKey: Self.lyricSpacingKey) }
+    }
+
+    /// 收缩态胶囊尺寸（宽/高，由用户在设置中调节），持久化。
+    @Published var capsuleSize: CGSize = {
+        guard let arr = UserDefaults.standard.array(forKey: AppState.capsuleSizeKey) as? [CGFloat],
+              arr.count == 2 else { return CGSize(width: 560, height: 110) }
+        return CGSize(width: arr[0], height: arr[1])
+    }() {
+        didSet {
+            UserDefaults.standard.set([capsuleSize.width, capsuleSize.height],
+                                      forKey: Self.capsuleSizeKey)
+        }
+    }
+
+    func resetLyricTuning() {
+        lyricOffset = .zero
+        lyricLineSpacing = 0
+        capsuleSize = CGSize(width: 560, height: 110)
+    }
+
+    /// 把歌词偏移钳制在胶囊内部：以最坏情况（双语两行）估算歌词块高度，
+    /// 保证无论胶囊怎么缩放，歌词整体都不会被拖出胶囊边界。
+    /// 若胶囊过小装不下，则只允许 0 偏移。
+    func clampLyricOffset(_ offset: CGSize) -> CGSize {
+        let lineH: CGFloat = 24
+        let transH: CGFloat = 18 + lyricLineSpacing
+        let margin: CGFloat = 14
+        let estH = lineH + transH + margin
+        let estW: CGFloat = 200 // 歌词块宽裕量，x 方向宽松钳制
+        let halfH = max(0, (capsuleSize.height - estH) / 2)
+        let halfW = max(0, (capsuleSize.width - estW) / 2)
+        return CGSize(
+            width: min(max(offset.width, -halfW), halfW),
+            height: min(max(offset.height, -halfH), halfH)
+        )
+    }
 
     /// 轻量自研检查更新单例（GitHub Release 比对）
     let updater = Updater.shared
