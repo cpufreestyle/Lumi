@@ -331,7 +331,10 @@ final class IslandWindowController: NSObject {
 
         // 热区按当前屏幕（机型）的刘海实际度量计算，精确贴合。
         let zone = notchHotZone(for: screen)
-        let inZone = zone.contains(mouse)
+        // 鼠标落在当前胶囊/面板窗口内也算"在热区"：胶囊显示后，
+        // 鼠标从刘海顶往下移到胶囊上这段时间仍判定为在热区，不会被提前收起，
+        // 从而能从容单击展开总面板（否则热区只有刘海顶部窄带，极易收起、点不出来）。
+        let inZone = zone.contains(mouse) || (window?.isVisible == true && window?.frame.contains(mouse) == true)
 
         if !AppState.shared.islandEnabled {
             // 已隐藏：只有"离开热区后重新进入"才会重新显示（触碰动态岛即显示）
@@ -472,6 +475,13 @@ final class IslandWindowController: NSObject {
             showIsland()
             statusToggleItem?.title = "隐藏动态岛"
         }
+    }
+
+    /// 取消固定：解除常驻锁定并立即收起胶囊，符合"取消固定即消失"的预期。
+    /// 之后鼠标移到刘海热区可再次唤出（普通 hover 态），单击即可展开总面板。
+    func unpinIsland() {
+        AppState.shared.islandPinned = false
+        hideIsland()
     }
 
     /// 根据当前状态决定窗口尺寸、位置与显隐

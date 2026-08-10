@@ -215,7 +215,7 @@ struct CollapsedView: View {
             HStack(spacing: 2) {
                 if state.islandPinned {
                     Button(action: {
-                        AppState.shared.islandPinned = false
+                        SharedIslandController.controller?.unpinIsland()
                     }) {
                         Image(systemName: "pin.slash.fill")
                             .font(.system(size: 11, weight: .medium))
