@@ -193,12 +193,14 @@ case "${1:-}" in
   reopen|restart)
     # 重新构建并重启：先退出旧实例，再编译、重新打包 .app，最后打开。
     # 用 osascript 优雅退出（bundle id），失败则回退到 pgrep+kill。
+    # 注意：osascript 在无匹配实例时会返回非 0，必须加 || true 兜底，
+    # 否则被脚本开头的 set -e 中断，导致 open / echo 不执行（restart 偶发 exit 1）。
     osascript -e 'tell application id "com.lumi.app" to quit' 2>/dev/null || \
-      for pid in $(pgrep -f "Contents/MacOS/Lumi"); do kill "$pid" 2>/dev/null; done
+      for pid in $(pgrep -f "Contents/MacOS/Lumi"); do kill "$pid" 2>/dev/null; done || true
     build
     package
-    osascript -e 'tell application id "com.lumi.app" to activate' 2>/dev/null
-    open "$APP"
+    osascript -e 'tell application id "com.lumi.app" to activate' 2>/dev/null || true
+    open "$APP" || true
     echo "REOPENED_OK" ;;
   check)
     pids=$(pgrep -f "Contents/MacOS/Lumi")
