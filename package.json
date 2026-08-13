@@ -12,6 +12,7 @@
     "supertest": "^6.3.3"
   },
   "dependencies": {
+    "@playwright/test": "^1.62.1",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2"
   }
