@@ -372,6 +372,11 @@ final class IslandWindowController: NSObject {
             hideTimer?.invalidate(); hideTimer = nil
             return
         }
+        // 鼠标仍在胶囊（窗口）内时绝不安排自动收起，避免"还没离开胶囊就消失"。
+        if window?.isVisible == true, window?.frame.contains(NSEvent.mouseLocation) == true {
+            hideTimer?.invalidate(); hideTimer = nil
+            return
+        }
         // 仅当「音乐模块 + 正在播放」时给较长停留（让歌词多停一会儿），
         // 其他场景维持基础短延迟，避免影响面板下方其他交互与歌词显示。
         let isMusicPlaying = AppState.shared.activeModule == .music &&
@@ -379,7 +384,14 @@ final class IslandWindowController: NSObject {
         let delay = isMusicPlaying ? musicLyricsHideDelay : hideDelay
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            self?.hideIsland()
+            // 收起前的最后校验：若定时到点时鼠标已回到胶囊内，则取消本次隐藏。
+            guard let self = self else { return }
+            if self.window?.isVisible == true,
+               self.window?.frame.contains(NSEvent.mouseLocation) == true {
+                self.hideTimer?.invalidate(); self.hideTimer = nil
+                return
+            }
+            self.hideIsland()
         }
     }
 
@@ -482,6 +494,21 @@ final class IslandWindowController: NSObject {
     func unpinIsland() {
         AppState.shared.islandPinned = false
         hideIsland()
+    }
+
+    /// 固定：常驻显示胶囊（鼠标移开不再收起）。若当前已隐藏则立即唤出。
+    func pinIsland() {
+        AppState.shared.islandPinned = true
+        showIsland()
+    }
+
+    /// 切换固定状态：未固定时点击即可固定常驻，已固定时取消固定。
+    func togglePin() {
+        if AppState.shared.islandPinned {
+            unpinIsland()
+        } else {
+            pinIsland()
+        }
     }
 
     /// 根据当前状态决定窗口尺寸、位置与显隐

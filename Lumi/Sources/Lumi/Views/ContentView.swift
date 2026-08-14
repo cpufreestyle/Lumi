@@ -163,22 +163,20 @@ struct CollapsedView: View {
                     .padding(.top, 6)
             }
         }
-        // 右下角：尺寸拖拽手柄 + （常驻时）取消固定按钮，水平并排，互不冲突、不影响居中歌词。
+        // 右下角：尺寸拖拽手柄 + 固定/取消固定按钮。常驻显示，未固定时点击即可固定（常驻），互不冲突、不影响居中歌词。
         .overlay(alignment: .bottomTrailing) {
             HStack(spacing: 2) {
-                if state.islandPinned {
-                    Button(action: {
-                        SharedIslandController.controller?.unpinIsland()
-                    }) {
-                        Image(systemName: "pin.slash.fill")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
-                            .frame(width: 22, height: 22)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("取消固定（鼠标移开即收起）")
+                Button(action: {
+                    SharedIslandController.controller?.togglePin()
+                }) {
+                    Image(systemName: state.islandPinned ? "pin.fill" : "pin")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(state.islandPinned ? .yellow : .white.opacity(0.7))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .help(state.islandPinned ? "取消固定（鼠标移开即收起）" : "固定胶囊（常驻显示）")
                 CapsuleResizeHandle()
             }
             .padding(5)
