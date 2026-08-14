@@ -2,39 +2,39 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>zh_CN</string>
-    <key>CFBundleDisplayName</key>
-    <string>Lumi</string>
-    <key>CFBundleExecutable</key>
-    <string>Lumi</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon.icns</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.lumi.app</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Lumi</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>Lumi</string>
+	<key>CFBundleExecutable</key>
+	<string>Lumi</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.lumi.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Lumi</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.17</string>
+	<string>1.1.18</string>
 	<key>CFBundleVersion</key>
-	<string>117</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSHighResolutionCapable</key>
-    <true/>
+	<string>1.1.18</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Lumi需要访问系统音乐来显示当前播放信息和控制播放。</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Lumi需要访问Apple Music以读取当前曲目的官方歌词（带时间轴）。</string>
-    <key>NSCalendarsUsageDescription</key>
-    <string>Lumi需要访问日历以显示您的日程安排。</string>
-    <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Lumi需要检测蓝牙连接状态。</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Lumi需要检测蓝牙连接状态。</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Lumi需要访问日历以显示您的日程安排。</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 </dict>
 </plist>

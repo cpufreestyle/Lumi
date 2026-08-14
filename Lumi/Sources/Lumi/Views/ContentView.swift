@@ -9,7 +9,8 @@ struct ContentView: View {
             if state.isExpanded {
                 ExpandedView()
             } else if state.isHovering {
-                PeekView()
+                // 预览卡片已移除：hover 时只显示收缩态胶囊，不再向下延伸预览内容。
+                CollapsedView()
             } else {
                 CollapsedView()
             }
@@ -22,52 +23,6 @@ struct ContentView: View {
         // 否则鼠标只是靠近顶部热区、尚未碰到岛本身就会展开预览。
         .contentShape(RoundedRectangle(cornerRadius: state.isExpanded ? 22 : 21))
         .background(WindowAccessor())
-    }
-}
-
-// MARK: - 悬停预览态：胶囊紧贴动态岛 + 预览内容向下延伸
-struct PeekView: View {
-    @ObservedObject private var state = AppState.shared
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // 胶囊紧贴动态岛（顶部），作为从动态岛延伸出去的起点
-            CollapsedView()
-            // 预览内容从胶囊向下延伸出去，不分离
-            PeekPreviewContent()
-                .frame(maxHeight: .infinity)
-        }
-        // 鼠标在预览面板（132 高）内移动时，即便离开内部胶囊条也不要收起；
-        // 由这里统一维持 isHovering=true，离开整个面板才切回收缩态。
-        .contentShape(RoundedRectangle(cornerRadius: 21))
-        .onHover { inside in
-            AppState.shared.isHovering = inside
-        }
-    }
-}
-
-struct PeekPreviewContent: View {
-    @ObservedObject private var state = AppState.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            switch state.activeModule {
-            case .music:          MusicPeekView()
-            case .calendar:       Text("今日日程预览").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            case .focus:          Text("专注计时").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            case .clipboard:      Text("最近复制内容").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            case .liveDetection:  Text("环境连接检测").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            case .claudeCode:     Text("AI 编程助手 · 问答/解释/调试").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            case .codex:          Text("代码解释 · 优化 · Bug 查找 · 测试生成").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            case .videoDownload:  Text("支持 1800+ 站点 · MP4/MP3 下载").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            case .game:           Text("TapTap H5 小游戏").font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -112,26 +67,24 @@ struct CollapsedView: View {
         // 用户设定的 capsuleSize.height 仅作单行时的最小高度兜底。
         VStack(alignment: .center, spacing: AppState.shared.lyricLineSpacing) {
             if state.activeModule == .music, music.playbackState == .playing {
-                MarqueeText(
-                    text: lyricLine,
-                    font: .system(size: 22, weight: .medium),
-                    textColor: .red,
-                    speed: 40,
-                    pause: 1.2
-                )
-                .frame(maxWidth: .infinity, alignment: .center)
+                // 静态显示主歌词（不再跑马灯滚动）。
+                Text(lyricLine)
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundColor(.red)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 // 双语模式且译文就绪：紧贴下方追加青色译文行（上下并排成组）
                 if music.bilingualMode != .off {
                     let tr = music.currentTranslationText
                     if !tr.isEmpty {
-                        MarqueeText(
-                            text: tr,
-                            font: .system(size: 16, weight: .regular),
-                            textColor: .cyan,
-                            speed: 36,
-                            pause: 1.2
-                        )
-                        .frame(maxWidth: .infinity, alignment: .center)
+                        // 静态显示译文（不再跑马灯滚动）。
+                        Text(tr)
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundColor(.cyan)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
                 }
             }
@@ -229,6 +182,11 @@ struct CollapsedView: View {
                 CapsuleResizeHandle()
             }
             .padding(5)
+        }
+        // 右侧竖直居中：只拉宽手柄，高度不变。独立于右下角缩放手柄，互不冲突。
+        .overlay(alignment: .trailing) {
+            CapsuleWidthHandle()
+                .padding(.trailing, 4)
         }
     }
 
@@ -1552,6 +1510,40 @@ struct CapsuleResizeHandle: View {
                     }
                     .onEnded { _ in
                         lastTranslation = .zero
+                        dragging = false
+                    }
+            )
+    }
+}
+
+// MARK: - 胶囊宽度拖拽手柄
+/// 收缩态胶囊右侧竖直居中的「只拉宽」手柄：拖拽实时改变 AppState.capsuleSize.width，
+/// 高度保持不变。独立于右下角缩放手柄，互不冲突。
+struct CapsuleWidthHandle: View {
+    @ObservedObject private var state = AppState.shared
+    @State private var lastTranslation: CGFloat = 0
+    @State private var dragging = false
+
+    private let minW: CGFloat = 280, maxW: CGFloat = 900
+
+    var body: some View {
+        Image(systemName: "arrow.left.and.right")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(.white.opacity(dragging ? 0.85 : 0.4))
+            .frame(width: 18, height: 30)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture()
+                    .onChanged { v in
+                        let delta = v.translation.width - lastTranslation
+                        lastTranslation = v.translation.width
+                        dragging = true
+                        let newW = min(maxW, max(minW, state.capsuleSize.width + delta))
+                        state.capsuleSize = CGSize(width: newW, height: state.capsuleSize.height)
+                        state.lyricOffset = state.clampLyricOffset(state.lyricOffset)
+                    }
+                    .onEnded { _ in
+                        lastTranslation = 0
                         dragging = false
                     }
             )
