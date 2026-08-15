@@ -51,6 +51,7 @@ final class IslandWindowController: NSObject {
     private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
     private var mouseMonitor: Any?
+    private var mouseDownMonitor: Any?
     private var hideTimer: Timer?
     /// 记录上一次鼠标是否处于热区，用于区分"重新进入"与"停留在热区"
     private var wasInZone: Bool = false
@@ -69,15 +70,23 @@ final class IslandWindowController: NSObject {
     private let externalHotZoneHeight: CGFloat = 4
     private let externalHotZoneWidth: CGFloat = 160
 
+    /// 内置屏（带刘海）刘海的真实宽度（pt）。
+    /// 注意：macOS 的 `safeAreaInsets.left/right` 在带刘海屏上恒为 0
+    /// （刘海只居于顶部中央，不会把安全区左右撑开），因此不能用
+    /// `frame.width - left - right` 推导——那会得到整屏宽，使热区横跨整个顶部，
+    /// 鼠标还没碰到刘海就误触发。真实刘海宽度约 250pt 且始终水平居中，
+    /// 故这里用固定的近似值并居中定位，确保只有鼠标真正进入凹槽才触发胶囊。
+    private let builtInNotchWidth: CGFloat = 250
+
     /// 收缩态黑岛宽度/高度上限：跟随 AppState.capsuleSize（用户可在设置中调节），
     /// 不再写死常量，让胶囊尺寸真正由用户自定义。
     /// 高度同时取物理刘海高度与该值的较大值，保证歌词不被裁切。
 
-    /// 鼠标移出后延迟隐藏（秒）。基础值较短，避免普遍影响面板下方其他交互。
-    private let hideDelay: TimeInterval = 0.6
-    /// 音乐播放时收缩态小胶囊（含歌词）额外停留，让用户有时间看清歌词；
-    /// 仅作用于音乐场景，不拖慢其他模块。
-    private let musicLyricsHideDelay: TimeInterval = 2.5
+    /// 鼠标移出刘海后立即隐藏（秒）。设为 0 即离开热区下一轮事件就收起，做到「移出刘海立即隐藏」。
+    /// 仍保留「鼠标已落在胶囊窗口内则不收起」的守卫，故从刘海移到胶囊（如点固定）不会消失。
+    private let hideDelay: TimeInterval = 0
+    /// 音乐播放时收缩态小胶囊（含歌词）也遵循「立即隐藏」：离开刘海即收起，不再额外停留。
+    private let musicLyricsHideDelay: TimeInterval = 0
 
     /// 用户手动调整的展开态窗口尺寸；为 nil 时回退到默认 360×480。
     /// 持久化保存，下次展开沿用，避免每次都重新拖。
@@ -115,6 +124,26 @@ final class IslandWindowController: NSObject {
         }
         // 合盖：内置屏已从 screens 中移除，回退到主屏（外接显示器）
         return NSScreen.main ?? screens.first
+    }
+
+    /// 热区与屏幕拓扑相关的缓存。鼠标移动事件每秒触发上百次，
+    /// 而 `builtInScreen`/`notchHotZone` 每次都要枚举 NSScreen 并调用 CoreGraphics
+    /// （CGDisplayIsBuiltin），重复计算极浪费。缓存一次，仅在屏幕拓扑变化时失效。
+    private var cachedBuiltInScreen: NSScreen?
+    private var cachedHotZone: CGRect?
+    private func invalidateScreenCache() {
+        cachedBuiltInScreen = nil
+        cachedHotZone = nil
+    }
+    /// 返回（可能缓存的）内置屏与其刘海热区，避免每次鼠标移动都重算。
+    private func activeScreenAndZone() -> (screen: NSScreen, zone: CGRect)? {
+        if let s = cachedBuiltInScreen, let z = cachedHotZone { return (s, z) }
+        guard let s = builtInScreen else { return nil }
+        let z = notchHotZone(for: s)
+        cachedBuiltInScreen = s
+        let zone = z
+        cachedHotZone = zone
+        return (s, z)
     }
 
     /// 给定屏幕是否为真正的内置屏（带刘海 / 内置面板）。
@@ -183,6 +212,16 @@ final class IslandWindowController: NSObject {
             return ev
         }
 
+        // 全局/局部鼠标按下监控：在刘海（顶部中央热区）双击可切换胶囊固定状态，
+        // 提供不依赖胶囊按钮的快捷固定方式。需「辅助功能」权限（与 hover 一致）。
+        mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
+            self?.handleNotchDoubleClick(event: ev)
+        }
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
+            self?.handleNotchDoubleClick(event: ev)
+            return ev
+        }
+
         // 菜单栏图标：即使没有辅助功能权限，也能看到应用并手动唤出动态岛
         setupStatusItem()
 
@@ -195,6 +234,8 @@ final class IslandWindowController: NSObject {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+            // 屏幕拓扑变化：内置屏/热区缓存失效，下一次鼠标事件重新计算。
+            self.invalidateScreenCache()
             self.updateWindowFrame(expanded: AppState.shared.isExpanded)
             if !AppState.shared.isExpanded {
                 self.evaluateHotZone()
@@ -231,7 +272,7 @@ final class IslandWindowController: NSObject {
         // 播放状态变化：播放时自动切到音乐模块，胶囊内容随之刷新
         MusicController.shared.$playbackState
             .receive(on: RunLoop.main)
-            .sink { [weak self] state in
+            .sink { state in
                 if state == .playing, !AppState.shared.isExpanded {
                     AppState.shared.activeModule = .music
                 }
@@ -277,10 +318,11 @@ final class IslandWindowController: NSObject {
     /// 计算某块屏幕的"动态岛"热区矩形。
     /// - 带刘海的内置屏：热区精确贴合刘海实际区域——
     ///   高度取 `safeAreaInsets.top`（刘海顶部到菜单栏/安全区的距离），
-    ///   宽度取 `2 * safeAreaInsets.left`（刘海左右安全区之和，即刘海真实宽度），
-    ///   水平居中于整屏（`screen.frame` 中心，而非 visibleFrame，因刘海在整屏中线）。
-    ///   这样不同 MacBook 型号（14"/16"，不同显示缩放）都会对齐到真实刘海，
-    ///   而不是写死的一条横带，避免"还没碰到岛就触发"。
+    ///   宽度取固定的刘海真实宽度 `builtInNotchWidth`（macOS 不暴露刘海宽度，
+    /// 其 `safeAreaInsets.left/right` 恒为 0，无法由此推导），水平居中于整屏
+    /// （`screen.frame` 中心，而非 visibleFrame，因刘海在整屏中线）。
+    ///   这样只有鼠标真正进入顶部中央的凹槽才会触发胶囊，
+    ///   而不是写死的一条横带或整屏宽的误触发区，避免"还没碰到岛就触发"。
     /// - 无刘海 / 外接屏（合盖场景）：回退到收窄的外部热区。
     private func notchHotZone(for screen: NSScreen) -> CGRect {
         // 合盖 / 外接屏：用保守的小热区
@@ -307,8 +349,9 @@ final class IslandWindowController: NSObject {
         let inset = screen.safeAreaInsets
         // 刘海高度：顶边到安全区顶部的距离
         let notchH = max(inset.top, 18)
-        // 刘海宽度 = 整屏宽 - 左右安全区（刘海两侧留白），而非安全区之和
-        let notchW = max(0, frame.width - inset.left - inset.right)
+        // 刘海宽度：macOS 不暴露刘海真实宽度（safeAreaInsets.left/right 恒为 0），
+        // 用固定的居中近似值 `builtInNotchWidth`，避免退化成整屏宽导致整条顶部误触发。
+        let notchW = min(builtInNotchWidth, frame.width)
         let zoneX = frame.midX - notchW / 2
         // y：从屏幕顶边往下 notchH（刘海占据整条顶部）
         let zoneY = frame.maxY - notchH
@@ -319,7 +362,8 @@ final class IslandWindowController: NSObject {
     private func evaluateHotZone() {
         guard !AppState.shared.isExpanded else { return }
         let mouse = NSEvent.mouseLocation
-        guard let screen = builtInScreen else { return }
+        // 复用缓存的屏幕与热区（屏幕拓扑变化时才重算），避免高频鼠标事件下重复枚举屏幕。
+        guard let (screen, zone) = activeScreenAndZone() else { return }
 
         // 仅内置屏参与判定：鼠标在外接显示器上时一律视为离开热区，
         // 立即收起，避免在其他屏顶部误触发面板。
@@ -330,17 +374,19 @@ final class IslandWindowController: NSObject {
         }
 
         // 热区按当前屏幕（机型）的刘海实际度量计算，精确贴合。
-        let zone = notchHotZone(for: screen)
         // 鼠标落在当前胶囊/面板窗口内也算"在热区"：胶囊显示后，
         // 鼠标从刘海顶往下移到胶囊上这段时间仍判定为在热区，不会被提前收起，
         // 从而能从容单击展开总面板（否则热区只有刘海顶部窄带，极易收起、点不出来）。
         let inZone = zone.contains(mouse) || (window?.isVisible == true && window?.frame.contains(mouse) == true)
 
         if !AppState.shared.islandEnabled {
-            // 已隐藏：只有"离开热区后重新进入"才会重新显示（触碰动态岛即显示）
+            // 主开关已关闭：仍允许 hover "瞥一眼"预览，但【不要把主开关翻成开】——
+            // 否则用户在菜单栏手动隐藏后，鼠标一碰刘海又被唤醒，等于隐藏不生效。
+            // 离开热区后同样自动收起（与开启态一致），即"鼠标移出刘海后胶囊消失"。
             if inZone, !wasInZone {
-                AppState.shared.islandEnabled = true
                 showIsland()
+            } else if !inZone {
+                scheduleHide()
             }
             wasInZone = inZone
             return
@@ -359,10 +405,25 @@ final class IslandWindowController: NSObject {
         wasInZone = inZone
         if inZone {
             hideTimer?.invalidate(); hideTimer = nil
-            showIsland()
+            // 已在显示则跳过：mouseMoved 每秒触发上百次，重复 orderFront+淡入会卡顿/闪抖。
+            if window?.isVisible != true { showIsland() }
         } else {
             scheduleHide()
         }
+    }
+
+    /// 双击刘海（顶部中央热区）切换胶囊固定状态。
+    /// 双击判定依赖 `NSEvent.clickCount == 2`；热区复用 `notchHotZone(for:)`，
+    /// 仅当鼠标落在刘海/外接热区内才触发，避免在菜单栏其它区域双击误触。
+    private func handleNotchDoubleClick(event: NSEvent) {
+        guard event.clickCount == 2 else { return }
+        let point = NSEvent.mouseLocation
+        // 复用缓存的屏幕与热区，避免每次点击都枚举屏幕。
+        guard let (_, zone) = activeScreenAndZone() else { return }
+        guard zone.contains(point) else { return }
+        // 切换固定：未固定→钉住常驻并立即弹出胶囊（视觉反馈），
+        // 已固定→取消固定并收起。
+        togglePin()
     }
 
     private func scheduleHide() {

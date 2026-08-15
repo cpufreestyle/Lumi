@@ -251,13 +251,13 @@ final class PluginMarketplace: NSObject, ObservableObject {
                let bid = dict["CFBundleIdentifier"] as? String,
                bid == plugin.id {
                 try? fm.removeItem(at: appURL)
-                installState[plugin.id] = .none
+                installState[plugin.id] = InstallState.none
                 refreshInstalled()
                 return
             }
             if let name = plugin.appName, appURL.lastPathComponent == name {
                 try? fm.removeItem(at: appURL)
-                installState[plugin.id] = .none
+                installState[plugin.id] = InstallState.none
                 refreshInstalled()
                 return
             }
@@ -321,37 +321,46 @@ final class PluginMarketplace: NSObject, ObservableObject {
 
 // MARK: - 下载 delegate
 
+// 注意：URLSessionDownloadDelegate 的方法在 URLSession 的后台线程回调，
+// 必须 `nonisolated` 才能满足协议（不允许被 @MainActor 隔离）。
+// 方法体整体切回主线程（用 @MainActor 闭包）后再访问主线程隔离的属性/方法，
+// 保证并发隔离正确，同时消除原 Swift 6 下的跨隔离警告。
 extension PluginMarketplace: URLSessionDownloadDelegate {
-    func urlSession(_ session: URLSession, downloadTask task: URLSessionDownloadTask,
+    nonisolated func urlSession(_ session: URLSession, downloadTask task: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
-        guard totalBytesExpectedToWrite > 0,
-              let pid = progressObservers[task] else { return }
-        let p = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        DispatchQueue.main.async { [weak self] in
-            self?.installProgress[pid] = p
-            if case .downloading = self?.installState[pid] ?? .none {
-                self?.installState[pid] = .downloading(p)
+        let totalExpected = totalBytesExpectedToWrite
+        let written = totalBytesWritten
+        Task { @MainActor in
+            guard totalExpected > 0,
+                  let pid = progressObservers[task] else { return }
+            let p = Double(written) / Double(totalExpected)
+            installProgress[pid] = p
+            if case .downloading = installState[pid] {
+                installState[pid] = .downloading(p)
             }
         }
     }
 
-    func urlSession(_ session: URLSession, downloadTask task: URLSessionDownloadTask,
+    nonisolated func urlSession(_ session: URLSession, downloadTask task: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
-        guard let pid = progressObservers[task] else { return }
-        progressObservers[task] = nil
-        finishInstall(pluginID: pid, location: location)
+        Task { @MainActor in
+            guard let pid = progressObservers[task] else { return }
+            progressObservers[task] = nil
+            finishInstall(pluginID: pid, location: location)
+        }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask,
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         // 由 downloadTask 的完成回调处理成功路径；此处仅处理真实错误
-        guard let pid = progressObservers.first(where: { $0.key == task })?.value,
-              let error = error else { return }
-        let ns = error as NSError
-        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.installState[pid] = .failed(error.localizedDescription)
+        let ns = (error as NSError?)
+        Task { @MainActor in
+            guard let pid = progressObservers.first(where: { $0.key == task })?.value,
+                  let error = error else { return }
+            let ns = error as NSError
+            if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
+            installState[pid] = .failed(error.localizedDescription)
         }
     }
 }

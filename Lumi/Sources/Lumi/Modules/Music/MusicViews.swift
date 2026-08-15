@@ -36,7 +36,7 @@ struct MarqueeText: View {
             }
             .clipped()
             .onAppear { containerWidth = w; restart() }
-            .onChange(of: w) { nv in containerWidth = nv; restart() }
+            .onChange(of: w) { _, nv in containerWidth = nv; restart() }
             .onPreferenceChange(WidthKey.self) { nv in
                 textWidth = nv
                 restart()
@@ -185,14 +185,14 @@ struct MusicExpandedView: View {
             .clipped()
             // 缩放拖拽期间冻结 viewSize：避免每帧重建几十行歌词造成卡顿，
             // 松手（isResizing=false）后下一帧再一次性应用最终尺寸并重排。
-            .onChange(of: geo.size) { nv in
+            .onChange(of: geo.size) { _, nv in
                 if !AppState.shared.isResizing { viewSize = nv }
             }
             }
         }
     }
 
-    // MARK: 顶部固定头部：歌手名（左） + 黄色固定标志（右）
+    // MARK: 顶部固定头部：歌手名（左）。固定/取消固定已改为「双击刘海」触发，故移除固定按钮。
     var headerBar: some View {
         HStack(spacing: 8) {
             Text(music.artist.isEmpty ? "歌手" : music.artist)
@@ -200,19 +200,6 @@ struct MusicExpandedView: View {
                 .foregroundColor(.white.opacity(0.6))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    AppState.shared.islandPinned.toggle()
-                }
-            } label: {
-                Image(systemName: AppState.shared.islandPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(AppState.shared.islandPinned ? .yellow : .white.opacity(0.5))
-                    .frame(width: 16, height: 16)
-            }
-            .buttonStyle(.plain)
-            .help(AppState.shared.islandPinned ? "取消固定小胶囊" : "固定小胶囊（常驻显示）")
         }
     }
 
@@ -602,7 +589,7 @@ struct LyricsSyncView: View {
             }
             .frame(maxHeight: .infinity)
             // 当前行变化时平滑滚动到它（居中），仅在播放且确有时间轴时进行
-            .onChange(of: activeIndex) { newIndex in
+            .onChange(of: activeIndex) { _, newIndex in
                 guard let newIndex = newIndex else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {
                     proxy.scrollTo(newIndex, anchor: .center)

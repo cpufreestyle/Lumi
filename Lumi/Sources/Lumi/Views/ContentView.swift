@@ -163,23 +163,10 @@ struct CollapsedView: View {
                     .padding(.top, 6)
             }
         }
-        // 右下角：尺寸拖拽手柄 + 固定/取消固定按钮。常驻显示，未固定时点击即可固定（常驻），互不冲突、不影响居中歌词。
+        // 右下角：尺寸拖拽手柄。固定/取消固定已改为「双击刘海」触发，故此处移除固定按钮。
         .overlay(alignment: .bottomTrailing) {
-            HStack(spacing: 2) {
-                Button(action: {
-                    SharedIslandController.controller?.togglePin()
-                }) {
-                    Image(systemName: state.islandPinned ? "pin.fill" : "pin")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(state.islandPinned ? .yellow : .white.opacity(0.7))
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(state.islandPinned ? "取消固定（鼠标移开即收起）" : "固定胶囊（常驻显示）")
-                CapsuleResizeHandle()
-            }
-            .padding(5)
+            CapsuleResizeHandle()
+                .padding(5)
         }
         // 右侧竖直居中：只拉宽手柄，高度不变。独立于右下角缩放手柄，互不冲突。
         .overlay(alignment: .trailing) {
@@ -768,7 +755,7 @@ struct LicensePanelView: View {
                         .background(Color.white.opacity(0.08))
                         .cornerRadius(8)
                         .focused($isKeyFocused)
-                        .onChange(of: activationKey) { newVal in
+                        .onChange(of: activationKey) { _, newVal in
                             // 自动格式化
                             let uppered = newVal.uppercased()
                             if uppered != newVal {
@@ -833,7 +820,7 @@ struct LicensePanelView: View {
                             .padding(8)
                             .background(Color.white.opacity(0.08))
                             .cornerRadius(8)
-                            .onChange(of: oldKeyInput) { v in
+                            .onChange(of: oldKeyInput) { _, v in
                                 let up = v.uppercased(); if up != v { oldKeyInput = up }
                             }
                         TextField("购买订单号（凭证）", text: $orderInput)
@@ -1062,8 +1049,8 @@ struct LicensePanelView: View {
     var statusTitle: String {
         switch license.status {
         case .unlicensed:                    return "未激活"
-        case .trial(let days):               return "试用中"
-        case .licensed(let expiry):          return "已激活"
+        case .trial:                         return "试用中"
+        case .licensed:                      return "已激活"
         case .lifetime:                      return "永久许可"
         case .revoked:                       return "已吊销"
         }
