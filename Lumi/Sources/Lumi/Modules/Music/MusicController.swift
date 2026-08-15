@@ -190,6 +190,67 @@ final class MusicController: ObservableObject {
     /// 切歌后封面快速重试用的计数器（仅在 scriptQueue 上访问）。
     private var artworkRetryCount = 0
 
+    // MARK: - 翻译模型选择
+    /// 翻译模型供应商：决定请求端点与 key 来源。
+    enum TranslateVendor {
+        case google      // Google 公开接口（无需 key）
+        case openrouter  // OpenAI 兼容，OpenRouter（LUMI_TRANSLATE_API_KEY）
+        case dashscope   // 通义千问兼容模式（LUMI_DASHSCOPE_API_KEY）
+    }
+
+    /// 可选翻译模型。
+    struct TranslateModelOption: Identifiable, Equatable {
+        let id: String          // 模型名
+        let label: String       // 显示名
+        let vendor: TranslateVendor
+        let usesLLM: Bool       // false=Google 公开接口
+    }
+
+    /// 候选翻译模型列表；通义千问实时翻译模型排在最前（优先）。
+    static let availableTranslateModels: [TranslateModelOption] = [
+        TranslateModelOption(id: "qwen3.5-livetranslate-flash-realtime",
+                             label: "通义·实时翻译 Flash", vendor: .dashscope, usesLLM: true),
+        TranslateModelOption(id: "qwen3.5-livetranslate-flash-realtime-2026-05-19",
+                             label: "通义·实时翻译 Flash(05-19)", vendor: .dashscope, usesLLM: true),
+        TranslateModelOption(id: "google/gemma-4-26b-a4b-it:free",
+                             label: "Gemma 4 26B (OpenRouter)", vendor: .openrouter, usesLLM: true),
+    ]
+
+    private let translateModelKey = "lumi_selected_translate_model"
+
+    /// 当前选中的翻译模型（UserDefaults 持久化）；默认优先第一个通义实时翻译模型。
+    @Published var selectedTranslateModelID: String = ""
+
+    /// 当前选中的模型选项（含供应商信息），供 UI 显示。
+    var selectedTranslateOption: TranslateModelOption {
+        Self.availableTranslateModels.first(where: { $0.id == selectedTranslateModelID })
+            ?? Self.availableTranslateModels[0]
+    }
+
+    /// 选中的模型是否走大模型通道（false=Google 公开接口，无需 key）。
+    private var useLLMTranslate: Bool { selectedTranslateOption.usesLLM }
+
+    /// 当前通道实际使用的模型名。
+    private var activeTranslateModel: String { selectedTranslateOption.id }
+
+    /// 当前通道实际使用的端点：dashscope 走兼容模式，openrouter 沿用原配置。
+    private var activeTranslateBaseURL: String {
+        switch selectedTranslateOption.vendor {
+        case .dashscope:  return "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        case .openrouter: return envValue("LUMI_TRANSLATE_BASE_URL") ?? "https://openrouter.ai/api/v1"
+        case .google:     return ""
+        }
+    }
+
+    /// 当前通道实际使用的 key：dashscope 读 LUMI_DASHSCOPE_API_KEY，openrouter 读 LUMI_TRANSLATE_API_KEY。
+    private var activeTranslateAPIKey: String? {
+        switch selectedTranslateOption.vendor {
+        case .dashscope:  return envValue("LUMI_DASHSCOPE_API_KEY")
+        case .openrouter: return envValue("LUMI_TRANSLATE_API_KEY")
+        case .google:     return nil
+        }
+    }
+
     private init() {
         showLyrics = UserDefaults.standard.object(forKey: showLyricsKey) as? Bool ?? true
         lyricsOffset = UserDefaults.standard.object(forKey: lyricsOffsetKey) as? TimeInterval ?? 0
@@ -199,6 +260,8 @@ final class MusicController: ObservableObject {
         startTimer()
         loadVolumeIfNeeded()
         loadTranslationCache()
+        selectedTranslateModelID = UserDefaults.standard.string(forKey: translateModelKey)
+            ?? Self.availableTranslateModels[0].id
         refreshVolume()
     }
 
@@ -711,11 +774,9 @@ final class MusicController: ObservableObject {
             let sepRange = m.range
             guard let r = Range(sepRange, in: line) else { continue }
             // 找到分隔符对应的右闭合符号（括号/方括号需配对到行尾或闭合符）
-            var tailStart = r.upperBound
             if sepKind == "(" {
                 if let close = line[r.upperBound...].range(of: "）")?.lowerBound ??
                     line[r.upperBound...].range(of: ")")?.lowerBound {
-                    tailStart = r.upperBound
                     let translated = String(line[r.upperBound..<close]).trimmingCharacters(in: .whitespaces)
                     let original = String(line[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
                     if let result = validateBilingual(original, translated) { return result }
@@ -971,25 +1032,15 @@ final class MusicController: ObservableObject {
         translateEnv[name]
     }
 
-    private var translateAPIKey: String? { envValue("LUMI_TRANSLATE_API_KEY") }
-    private var translateBaseURL: String {
-        envValue("LUMI_TRANSLATE_BASE_URL") ?? "https://openrouter.ai/api/v1"
-    }
-    private var translateModel: String {
-        envValue("LUMI_TRANSLATE_MODEL") ?? "google/gemma-4-26b-a4b-it:free"
-    }
-    private var translateForceLLM: Bool {
-        (envValue("LUMI_FORCE_LLM") ?? "0") == "1"
-    }
+    // 翻译端点/key 现由「选中的模型」驱动（见上方 activeTranslate* 计算属性），
+    // 不再使用 LUMI_FORCE_LLM 环境变量开关。
 
     /// 翻译主入口。
-    /// 默认走 Google 公开翻译接口（无需 key、无每日硬限额、对歌词足够准确、稳定可用）；
-    /// 仅当用户通过 LUMI_FORCE_LLM=1 显式开启且已配置有效 key 时，才优先走大模型（OpenAI 兼容）。
-    /// 任一通道失败都回退到另一通道，最终失败返回 nil（UI 显示原文），不长时间挂起。
+    /// 通道由「当前选中的翻译模型」决定：选中大模型类模型 -> 优先走大模型；
+    /// 大模型失败则回退 Google 公开接口。最终失败返回 nil（UI 显示原文），不长时间挂起。
     private func translate(text: String, completion: @escaping (String?) -> Void) {
-        let forceLLM = translateForceLLM
-        if forceLLM, let key = translateAPIKey {
-            self.diagLog("translate: 强制大模型 key=\(String(key.prefix(12)))... model=\(translateModel)")
+        if useLLMTranslate, let key = activeTranslateAPIKey {
+            self.diagLog("translate: 大模型 key=\(String(key.prefix(12)))... model=\(activeTranslateModel)")
             self.translateViaLLM(text: text) { result in
                 if let result { completion(result) }
                 else { self.translateViaGoogle(text: text, completion: completion) }
@@ -998,7 +1049,7 @@ final class MusicController: ObservableObject {
             self.diagLog("translate: 走 Google 公开接口（稳定、无 key）")
             translateViaGoogle(text: text) { result in
                 if let result { completion(result) }
-                else if self.translateAPIKey != nil {
+                else if self.useLLMTranslate, self.activeTranslateAPIKey != nil {
                     self.translateViaLLM(text: text) { completion($0) }
                 } else { completion(nil) }
             }
@@ -1006,17 +1057,18 @@ final class MusicController: ObservableObject {
     }
 
     /// 调用大模型（OpenAI 兼容 Chat Completions）补全翻译。
+    /// 端点与 key 由选中的模型决定（dashscope 走兼容模式，openrouter 沿用原配置）。
     /// 目标语言：原文含中文 -> 译为英文；否则 -> 译为中文。失败时返回 nil，由调用方兜底。
     private func translateViaLLM(text: String, completion: @escaping (String?) -> Void) {
-        guard let key = translateAPIKey else { completion(nil); return }
+        guard let key = activeTranslateAPIKey else { completion(nil); return }
         let hasCJK = text.contains { 0x4E00...0x9FFF ~= $0.unicodeScalars.first?.value ?? 0 }
         let targetLang = hasCJK ? "English" : "Chinese"
         let sysPrompt = "You are a lyrics translator. Translate the given line into \(targetLang) only. Keep it concise, preserve tone, do NOT add explanations or quotes. Output only the translation."
-        let urlStr = "\(translateBaseURL)/chat/completions"
+        let urlStr = "\(activeTranslateBaseURL)/chat/completions"
         guard let url = URL(string: urlStr) else { completion(nil); return }
 
         let body: [String: Any] = [
-            "model": translateModel,
+            "model": activeTranslateModel,
             "messages": [
                 ["role": "system", "content": sysPrompt],
                 ["role": "user", "content": text]
@@ -1097,38 +1149,37 @@ final class MusicController: ObservableObject {
         guard !joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             completion(nil); return
         }
-        let forceLLM = translateForceLLM
-        // 默认 Google 公开接口；仅 LUMI_FORCE_LLM=1 且配置了 key 才优先大模型
-        if !(forceLLM && translateAPIKey != nil) {
-            translateViaGoogle(text: joined) { tr in
-                if let tr, self.splitBatch(tr, expected: lines.count) != nil {
-                    completion(self.splitBatch(tr, expected: lines.count))
-                } else if self.translateAPIKey != nil {
-                    self.translateBatchViaLLM(lines: lines, joined: joined, completion: completion)
-                } else { completion(nil) }
-            }
+        // 大模型优先通道（按选中的模型驱动）；否则默认 Google 公开接口
+        if useLLMTranslate, activeTranslateAPIKey != nil {
+            translateBatchViaLLM(lines: lines, joined: joined, completion: completion)
             return
         }
-        translateBatchViaLLM(lines: lines, joined: joined, completion: completion)
+        translateViaGoogle(text: joined) { tr in
+            if let tr, self.splitBatch(tr, expected: lines.count) != nil {
+                completion(self.splitBatch(tr, expected: lines.count))
+            } else if self.useLLMTranslate, self.activeTranslateAPIKey != nil {
+                self.translateBatchViaLLM(lines: lines, joined: joined, completion: completion)
+            } else { completion(nil) }
+        }
     }
 
     /// 批量翻译走大模型（LLM 优先通道）。失败时回退 Google 公开接口，最终失败返回 nil。
     private func translateBatchViaLLM(lines: [String], joined: String,
                                       completion: @escaping ([String]?) -> Void) {
-        guard let key = translateAPIKey else {
+        guard let key = activeTranslateAPIKey else {
             translateViaGoogle(text: joined) { completion(self.splitBatch($0, expected: lines.count)) }
             return
         }
         let hasCJK = joined.contains { 0x4E00...0x9FFF ~= $0.unicodeScalars.first?.value ?? 0 }
         let targetLang = hasCJK ? "English" : "Chinese"
         let sysPrompt = "You are a lyrics translator. Translate each line of the given text into \(targetLang), keeping the SAME number of lines as the input, and use a single newline to separate lines. Keep it concise, preserve tone. Do NOT add explanations, numbering, or quotes. Output only the translated lines."
-        let urlStr = "\(translateBaseURL)/chat/completions"
+        let urlStr = "\(activeTranslateBaseURL)/chat/completions"
         guard let url = URL(string: urlStr) else {
             translateViaGoogle(text: joined) { completion(self.splitBatch($0, expected: lines.count)) }
             return
         }
         let body: [String: Any] = [
-            "model": translateModel,
+            "model": activeTranslateModel,
             "messages": [
                 ["role": "system", "content": sysPrompt],
                 ["role": "user", "content": joined]

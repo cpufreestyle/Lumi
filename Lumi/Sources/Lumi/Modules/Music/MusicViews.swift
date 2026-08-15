@@ -200,7 +200,41 @@ struct MusicExpandedView: View {
                 .foregroundColor(.white.opacity(0.6))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            modelPicker
         }
+    }
+
+    /// 顶部右侧：翻译模型选择器。优先通义实时翻译模型，可在菜单内切换；
+    /// 选中项持久化（UserDefaults），供翻译通道按模型驱动端点与 key。
+    private var modelPicker: some View {
+        Menu {
+            ForEach(MusicController.availableTranslateModels) { opt in
+                Button {
+                    music.selectedTranslateModelID = opt.id
+                } label: {
+                    if opt.id == music.selectedTranslateModelID {
+                        Label(opt.label, systemImage: "checkmark")
+                    } else {
+                        Text(opt.label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 11))
+                Text(music.selectedTranslateOption.label)
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundColor(.white.opacity(0.55))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.white.opacity(0.08))
+            .cornerRadius(6)
+        }
+        .menuStyle(.borderlessButton)
     }
 
     // MARK: 专辑封面
