@@ -167,10 +167,11 @@ final class AppState: ObservableObject {
     let updater = Updater.shared
 
     /// 插件发现管理器（Phase 0 插件市场骨架）
-    let plugins = PluginDiscovery.shared
+    /// 该类为 @MainActor，AppState 非隔离，故在主线程上下文内捕获其单例。
+    let plugins = MainActor.assumeIsolated { PluginDiscovery.shared }
 
     /// L3 面板桥接（Phase 2：第三方插件向内嵌面板回写结构化内容）
-    let pluginPanels = PluginPanelBridge.shared
+    let pluginPanels = MainActor.assumeIsolated { PluginPanelBridge.shared }
 
     /// 当前选中的 L3 插件模块 id（nil = 未选中插件模块，显示原生模块）。
     /// 标签栏里带 panel 的插件会作为独立标签，点击即设置此值并显示其内嵌面板。
