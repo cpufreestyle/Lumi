@@ -213,6 +213,8 @@ struct ExpandedView: View {
     @ObservedObject private var updater = Updater.shared
     // 插件面板数据在 PluginPanelBridge.shared 上，需直接观察才能随轮询刷新
     @ObservedObject private var pluginPanels = PluginPanelBridge.shared
+    // 插件清单（占位面板需要从 manifest 取名称/图标）
+    @ObservedObject private var plugins = PluginDiscovery.shared
     @State private var dragOffset: CGFloat = 0
     /// 展开爆开动画：从刘海（顶部）缩放弹入，模仿 NotchAI「砰」地长出来的感觉
     @State private var appear = false
@@ -343,11 +345,22 @@ struct ExpandedView: View {
         // 常驻「插件市场」页：作为顶部独立「插件」标签，优先于模块/插件面板
         if state.showPluginMarket {
             PluginMarketplaceView()
-        } else if let pid = state.selectedPluginPanelID,
-           let panel = pluginPanels.panels[pid] {
-            // L3：选中带 panel 的第三方插件时，整个内容区替换为该插件的独立页面，
-            // 完全覆盖底层原生模块（不再与音乐/游戏等原生页面叠加），
-            // 不同插件之间各自独立、互不重叠。
+        } else if let pid = state.selectedPluginPanelID {
+            // L3：选中带 panel 的第三方插件时，整个内容区替换为该插件的独立页面。
+            // 插件未运行/尚未写入面板数据时，按清单合成占位面板，
+            // 绝不回退到原生模块（否则点插件标签却显示音乐，观感是"跳错页"）。
+            let manifest = plugins.plugins.first { $0.id == pid }
+            let panel = pluginPanels.panels[pid] ?? PluginPanelData(
+                id: pid,
+                title: manifest?.resolvedName ?? "插件",
+                iconName: manifest?.resolvedIconName ?? "puzzlepiece",
+                subtitle: "插件未运行或暂无数据",
+                lines: [
+                    .text("启动插件主程序后，这里会显示它的实时内容。"),
+                    .button("启动插件主程序")
+                ],
+                updatedAt: Date().timeIntervalSince1970
+            )
             PluginPanelView(panel: panel)
         } else {
             // 原生模块页面
