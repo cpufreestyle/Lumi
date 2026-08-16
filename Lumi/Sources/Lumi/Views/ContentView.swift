@@ -192,8 +192,6 @@ struct CollapsedView: View {
             CalendarBriefView()
         case .focus:
             FocusBriefView()
-        case .clipboard:
-            ClipboardBriefView()
         case .liveDetection:
             LiveDetectionBriefView()
         case .claudeCode:
@@ -360,8 +358,6 @@ struct ExpandedView: View {
                 CalendarExpandedView()
             case .focus:
                 FocusExpandedView()
-            case .clipboard:
-                ClipboardExpandedView()
             case .liveDetection:
                 LiveDetectionExpandedView()
             case .claudeCode:
@@ -548,7 +544,6 @@ struct TabBarView: View {
 struct MusicBriefView: View { var body: some View { MusicBriefContent() } }
 struct CalendarBriefView: View { var body: some View { Text("📅 今日 3 项日程").font(.system(size: 12)).foregroundColor(.white.opacity(0.7)) } }
 struct FocusBriefView: View { var body: some View { FocusBriefContent() } }
-struct ClipboardBriefView: View { var body: some View { Text("📋 12 条记录").font(.system(size: 12)).foregroundColor(.white.opacity(0.7)) } }
 struct LiveDetectionBriefView: View { var body: some View { LiveDetectionBriefContent() } }
 
 // MARK: - 窗口大小通知辅助

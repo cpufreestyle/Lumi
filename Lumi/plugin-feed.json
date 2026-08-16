@@ -34,12 +34,17 @@
     },
     {
       "id": "com.lumi.clipboard-plus",
-      "name": "剪贴板增强（即将上架）",
-      "iconName": "doc.on.clipboard",
+      "name": "剪贴板增强",
+      "iconName": "doc.on.clipboard.fill",
+      "appName": "ClipboardPlus.app",
+      "panelHint": "剪贴板历史检索、智能格式转换、敏感内容过滤",
+      "minHostVersion": "1.1.9",
+      "version": "1.0.0",
       "category": "工具",
-      "summary": "历史检索、格式转换、跨设备同步 —— 社区源开放后上架",
+      "summary": "剪贴板历史检索、智能格式转换（大小写/URL/Base64/JSON）、敏感内容自动过滤、置顶固定",
+      "downloadURL": "https://github.com/cpufreestyle/Lumi/releases/download/v1.1.19/ClipboardPlus.app.zip",
       "permissions": [
-        { "type": "accessibility", "reason": "读取剪贴板内容" }
+        { "type": "accessibility", "reason": "读取剪贴板内容以提供历史记录功能" }
       ]
     }
   ]
