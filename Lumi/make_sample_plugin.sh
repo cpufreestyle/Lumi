@@ -89,6 +89,8 @@ echo "  3) 面板里「刷新天气」按钮会回传 lumi-sample://action?name=
 
 if [[ "$DO_ZIP" == "1" ]]; then
     ZIP_NAME="LumiSamplePlugin.app.zip"
-    ditto -c -k "$APP_PATH" "$ZIP_NAME"
+    # --keepParent：保留 .app 外壳。缺省时 ditto 只打包 .app 的内容（zip 根为 Contents/），
+    # 市场端解压后找不到 .app 会报「压缩包内无 .app」，导致卸载后无法重新安装。
+    ditto -c -k --keepParent "$APP_PATH" "$ZIP_NAME"
     echo "已打包：$ZIP_NAME（上传到 GitHub Release 后，市场中的「安装」按钮即可下载）"
 fi

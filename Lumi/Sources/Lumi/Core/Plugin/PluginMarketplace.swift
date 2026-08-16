@@ -266,7 +266,7 @@ final class PluginMarketplace: NSObject, ObservableObject {
 
     // MARK: - 内部：完成下载后处理
 
-    private func finishInstall(pluginID: String, location: URL) {
+    private func finishInstall(pluginID: String, manifest: PluginManifest?, location: URL) {
         let fm = FileManager.default
         let workDir = fm.temporaryDirectory
             .appendingPathComponent("lumi_plugin_install_\(pluginID)")
@@ -286,14 +286,9 @@ final class PluginMarketplace: NSObject, ObservableObject {
                               userInfo: [NSLocalizedDescriptionKey: "解压失败"])
             }
 
-            // 找到解压出的 .app
-            let apps = (try? fm.contentsOfDirectory(at: workDir,
-                    includingPropertiesForKeys: nil))?
-                .filter { $0.pathExtension == "app" } ?? []
-            guard let newApp = apps.first else {
-                throw NSError(domain: "marketplace", code: 2,
-                              userInfo: [NSLocalizedDescriptionKey: "压缩包内无 .app"])
-            }
+            // 找到解压出的 .app（兼容坏包：zip 根为 Contents/ 时按清单 appName 补外壳）
+            let newApp = try PluginArchive.locateOrWrapApp(
+                in: workDir, fallbackAppName: manifest?.appName)
 
             // 去隔离标记（与 Updater 一致）
             let xattr = Process()
@@ -347,7 +342,10 @@ extension PluginMarketplace: URLSessionDownloadDelegate {
         Task { @MainActor in
             guard let pid = progressObservers[task] else { return }
             progressObservers[task] = nil
-            finishInstall(pluginID: pid, location: location)
+            // 坏包自愈需要清单里的 appName 作为 .app 外壳名
+            let manifest = available.first { $0.id == pid }
+                ?? installed.first { $0.id == pid }
+            finishInstall(pluginID: pid, manifest: manifest, location: location)
         }
     }
 

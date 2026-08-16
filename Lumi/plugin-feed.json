@@ -18,6 +18,21 @@
       ]
     },
     {
+      "id": "com.jacobe.skills",
+      "name": "JacobeAPI",
+      "iconName": "puzzlepiece",
+      "appName": "JacobeAPI.app",
+      "panelHint": "本地优先的 Skill 与 MCP 配置管理工具",
+      "minHostVersion": "1.1.9",
+      "version": "0.1.1",
+      "category": "工具",
+      "summary": "Skill 与 MCP 配置管理（社区移植 macOS 版）：托盘 + 悬浮球 + 快捷面板，独立进程运行",
+      "downloadURL": "https://github.com/cpufreestyle/Lumi/releases/download/v1.1.19/JacobeAPI.app.zip",
+      "permissions": [
+        { "type": "none", "reason": "独立进程运行，网络等权限由 JacobeAPI 自行申请" }
+      ]
+    },
+    {
       "id": "com.lumi.clipboard-plus",
       "name": "剪贴板增强（即将上架）",
       "iconName": "doc.on.clipboard",
