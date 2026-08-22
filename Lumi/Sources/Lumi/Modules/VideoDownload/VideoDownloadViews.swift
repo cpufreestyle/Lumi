@@ -50,53 +50,60 @@ final class VideoDownloadController: ObservableObject {
         checkYtDlp()
     }
 
-    /// 检查 yt-dlp 是否已安装
+    /// 检查 yt-dlp 是否已安装。优先从 PATH 查找，再回退到常见绝对路径（包括 brew 安装的 symlink）。
     private func checkYtDlp() {
-        let task = Process()
-        task.launchPath = "/usr/bin/env"
-        task.arguments = ["which", "yt-dlp"]
-
-        // 也尝试检查 brew 安装路径
-        let possiblePaths = [
-            "/usr/local/bin/yt-dlp",
-            "/opt/homebrew/bin/yt-dlp",
-            "/usr/bin/yt-dlp"
-        ]
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
-
-        do {
-            try task.run()
-            task.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-            DispatchQueue.main.async { [weak self] in
-                self?.ytdlpAvailable = !path.isEmpty || possiblePaths.contains(where: {
-                    FileManager.default.isExecutableFile(atPath: $0)
-                })
-            }
-        } catch {
-            DispatchQueue.main.async { [weak self] in
-                self?.ytdlpAvailable = possiblePaths.contains(where: {
-                    FileManager.default.isExecutableFile(atPath: $0)
-                })
-            }
+        let path = Self.resolveYtDlpPath()
+        DispatchQueue.main.async { [weak self] in
+            self?.ytdlpAvailable = path != nil
         }
     }
 
     /// 获取 yt-dlp 可执行路径
     private func ytdlpPath() -> String? {
-        let paths = [
+        Self.resolveYtDlpPath()
+    }
+
+    /// 统一解析 yt-dlp 路径：先 PATH，再常见绝对路径；支持 symlink。
+    private static func resolveYtDlpPath() -> String? {
+        // 1) 尝试 PATH 查找
+        let whichTask = Process()
+        whichTask.launchPath = "/usr/bin/env"
+        whichTask.arguments = ["which", "yt-dlp"]
+        whichTask.environment = ProcessInfo.processInfo.environment
+
+        let pipe = Pipe()
+        whichTask.standardOutput = pipe
+        whichTask.standardError = FileHandle.nullDevice
+
+        do {
+            try whichTask.run()
+            whichTask.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !path.isEmpty,
+               FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        } catch {
+            // 忽略 PATH 查找失败
+        }
+
+        // 2) 回退到常见绝对路径。brew 安装的是 symlink，isExecutableFile 对 symlink 返回 false，
+        //    因此这里用 fileExists + 可选的 destIsExecutable 校验真实目标。
+        let possiblePaths = [
             "/opt/homebrew/bin/yt-dlp",
             "/usr/local/bin/yt-dlp",
             "/usr/bin/yt-dlp"
         ]
-        for p in paths where FileManager.default.isExecutableFile(atPath: p) {
-            return p
+        let fm = FileManager.default
+        for p in possiblePaths where fm.fileExists(atPath: p) {
+            if let resolved = try? fm.destinationOfSymbolicLink(atPath: p),
+               fm.isExecutableFile(atPath: resolved) {
+                return p
+            }
+            if fm.isExecutableFile(atPath: p) {
+                return p
+            }
         }
         return nil
     }
