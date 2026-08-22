@@ -339,13 +339,27 @@ extension PluginMarketplace: URLSessionDownloadDelegate {
 
     nonisolated func urlSession(_ session: URLSession, downloadTask task: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
+        // URLSession 只保证下载临时文件（CFNetworkDownload_*.tmp）存活到本方法返回；
+        // finishInstall 需经 Task 切回主线程执行，届时临时文件已被系统回收，
+        // 会报「前者不存在」。必须先同步挪到自有临时路径，再异步处理。
+        let safeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lumi_plugin_dl_\(UUID().uuidString).zip")
+        do {
+            try FileManager.default.moveItem(at: location, to: safeURL)
+        } catch {
+            do { try FileManager.default.copyItem(at: location, to: safeURL) }
+            catch { return } // 文件已丢失，无法挽救
+        }
         Task { @MainActor in
-            guard let pid = progressObservers[task] else { return }
+            guard let pid = progressObservers[task] else {
+                try? FileManager.default.removeItem(at: safeURL)
+                return
+            }
             progressObservers[task] = nil
             // 坏包自愈需要清单里的 appName 作为 .app 外壳名
             let manifest = available.first { $0.id == pid }
                 ?? installed.first { $0.id == pid }
-            finishInstall(pluginID: pid, manifest: manifest, location: location)
+            finishInstall(pluginID: pid, manifest: manifest, location: safeURL)
         }
     }
 
