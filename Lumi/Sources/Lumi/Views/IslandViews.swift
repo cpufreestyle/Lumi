@@ -110,7 +110,7 @@ struct CollapsedView: View {
                     .padding(.top, 6)
             }
         }
-        // 右下角：尺寸拖拽手柄。固定/取消固定已改为「双击刘海」触发，故此处移除固定按钮。
+        // 右下角：尺寸拖拽手柄。
         .overlay(alignment: .bottomTrailing) {
             CapsuleResizeHandle()
                 .padding(5)

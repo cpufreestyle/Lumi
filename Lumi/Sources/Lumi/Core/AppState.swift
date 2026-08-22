@@ -84,13 +84,6 @@ final class AppState: ObservableObject {
     }
     private let islandEnabledKey = "lumi_island_enabled"
 
-    /// 是否将动态岛（小胶囊）锁定为常驻：开启后即使鼠标离开热区也不会自动收起，
-    /// 便于稳定查看歌词等内容。音乐模块常用。
-    @Published var islandPinned: Bool = false {
-        didSet { UserDefaults.standard.set(islandPinned, forKey: islandPinnedKey) }
-    }
-    private let islandPinnedKey = "lumi_island_pinned"
-
     /// 展开面板是否正在被手动缩放（拖拽右下角手柄中）。
     /// 用于缩放期间冻结歌词区字号/尺寸的重排，避免每帧重建几十行歌词导致卡顿。
     @Published var isResizing: Bool = false
@@ -179,7 +172,6 @@ final class AppState: ObservableObject {
 
     private init() {
         islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
-        islandPinned = UserDefaults.standard.object(forKey: islandPinnedKey) as? Bool ?? false
         // 启动后静默检查一次更新（后台，不弹窗，除非发现新版本）
         updater.autoCheckOnLaunch()
         // 启动后扫描本地已安装的第三方插件（带 lumi-plugin.json 的 .app）。
