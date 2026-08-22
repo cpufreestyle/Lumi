@@ -152,6 +152,9 @@ final class PluginMarketplace: NSObject, ObservableObject {
 
         // 并发拉取所有启用源，合并去重（后加载的源优先级更高，覆盖同 id）
         let group = DispatchGroup()
+        // URLSession 回调各自在后台线程执行，多源并发返回时 collected 的
+        // append 必须加锁保护，否则是无锁并发写数组（数据竞争）。
+        let collectLock = NSLock()
         var collected: [[PluginManifest]] = []
         for url in sources {
             group.enter()
@@ -159,7 +162,9 @@ final class PluginMarketplace: NSObject, ObservableObject {
                 defer { group.leave() }
                 if let data = data,
                    let feed = try? JSONDecoder().decode(PluginFeed.self, from: data) {
+                    collectLock.lock()
                     collected.append(feed.plugins)
+                    collectLock.unlock()
                 }
             }
             task.resume()
@@ -366,7 +371,6 @@ extension PluginMarketplace: URLSessionDownloadDelegate {
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         // 由 downloadTask 的完成回调处理成功路径；此处仅处理真实错误
-        let ns = (error as NSError?)
         Task { @MainActor in
             guard let pid = progressObservers.first(where: { $0.key == task })?.value,
                   let error = error else { return }

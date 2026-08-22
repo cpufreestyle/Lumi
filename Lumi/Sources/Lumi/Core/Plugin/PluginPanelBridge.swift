@@ -78,13 +78,15 @@ final class PluginPanelBridge: ObservableObject {
     @Published private(set) var panels: [String: PluginPanelData] = [:]
 
     /// 共享目录（宿主管理，插件可写）
-    static let panelsDir: URL = {
+    nonisolated static let panelsDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask).first!
         return base.appendingPathComponent("Lumi/PluginPanels", isDirectory: true)
     }()
 
     private var timer: Timer?
+    /// 面板文件轮询专用后台队列:磁盘读取与 JSON 解码不占主线程,消除每秒一次的主线程 I/O。
+    private let pollQueue = DispatchQueue(label: "com.lumi.pluginpanels.poll", qos: .utility)
     /// 当前需要轮询的插件 id 集合（由 PluginDiscovery 扫描带 panel 的插件后设置）
     private var watchedIDs: Set<String> = []
 
@@ -101,18 +103,25 @@ final class PluginPanelBridge: ObservableObject {
         startPollingIfNeeded()
     }
 
-    /// 手动读一次某个插件的面板文件（供首个版本未轮询时立即生效）
-    func refresh(_ id: String) {
-        let url = Self.panelsDir.appendingPathComponent("\(id).json")
+    /// 后台读取并解码单个面板文件（纯函数，可在任意队列调用）。
+    /// 文件缺失/无法解码返回 nil（调用方据此移除对应面板条目）。
+    nonisolated private static func readPanelFile(_ id: String) -> PluginPanelData? {
+        let url = panelsDir.appendingPathComponent("\(id).json")
         guard let data = try? Data(contentsOf: url),
-              var p = try? JSONDecoder().decode(PluginPanelData.self, from: data) else {
-            panels.removeValue(forKey: id)
-            return
-        }
+              var p = try? JSONDecoder().decode(PluginPanelData.self, from: data) else { return nil }
         // 文件名即 id，补强一致性
         if p.id != id { p = PluginPanelData(id: id, title: p.title, iconName: p.iconName,
                                             subtitle: p.subtitle, lines: p.lines, updatedAt: p.updatedAt) }
-        panels[id] = p
+        return p
+    }
+
+    /// 手动读一次某个插件的面板文件（供首个版本未轮询时立即生效）
+    func refresh(_ id: String) {
+        if let p = Self.readPanelFile(id) {
+            panels[id] = p
+        } else {
+            panels.removeValue(forKey: id)
+        }
     }
 
     func refreshAll() {
@@ -122,9 +131,27 @@ final class PluginPanelBridge: ObservableObject {
     private func startPollingIfNeeded() {
         guard !watchedIDs.isEmpty else { timer?.invalidate(); timer = nil; return }
         guard timer == nil else { return }
-        // 1s 轮询：轻量、对第三方 app 无反向调用压力，也避免 XPC 连接管理复杂度
+        // 1s 轮询：轻量、对第三方 app 无反向调用压力，也避免 XPC 连接管理复杂度。
+        // 读取/解码在后台队列进行，主线程仅在数据变化时合并写回——
+        // 原实现每秒在主线程同步读文件、且无条件写 @Published 字典，
+        // 会造成常驻 1Hz 的主线程 I/O 与 SwiftUI 重渲染。
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshAll() }
+            Task { @MainActor in
+                guard let self = self, !self.watchedIDs.isEmpty else { return }
+                let ids = Array(self.watchedIDs)
+                self.pollQueue.async {
+                    let results = ids.map { (id: $0, panel: Self.readPanelFile($0)) }
+                    Task { @MainActor in
+                        for r in results {
+                            if let p = r.panel {
+                                if self.panels[r.id] != p { self.panels[r.id] = p }
+                            } else if self.panels[r.id] != nil {
+                                self.panels[r.id] = nil
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

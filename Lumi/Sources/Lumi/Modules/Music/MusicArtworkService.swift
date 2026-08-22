@@ -46,27 +46,33 @@ extension MusicController {
 
     /// 切歌后用 scriptQueue 周期性探一次封面：Music 封面往往晚于切歌事件就绪，
     /// 因此主动重试若干次（总跨度约 2.2s），不等 1.5s 主轮询，缩短首屏延迟。
+    /// 计数器与探测闭包统一收敛到 scriptQueue：fetchArtwork 从 artworkQueue 调用
+    /// 本方法时，原实现会在 artworkQueue 上读写 artworkRetryCount，与 fetchInfoSync
+    /// 在 scriptQueue 上的重置形成跨队列无锁访问。
     func scheduleArtworkRetry() {
-        guard artworkRetryCount < 4 else { return }
-        artworkRetryCount += 1
-        let delay = [0.5, 0.9, 1.5, 2.2][artworkRetryCount - 1]
-        scriptQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+        scriptQueue.async { [weak self] in
             guard let self = self else { return }
-            if self.hasArtFlag { return }   // 已取到封面
-            let src = """
-            tell application "Music"
-                try
-                    if player state is not stopped and exists artwork 1 of current track then
-                        return "yes"
-                    else
-                        return "no"
-                    end if
-                end try
-                return "no"
-            end tell
-            """
-            guard let d = self.runScript(src), d.stringValue == "yes" else { return }
-            self.fetchArtwork()
+            guard self.artworkRetryCount < 4 else { return }
+            self.artworkRetryCount += 1
+            let delay = [0.5, 0.9, 1.5, 2.2][self.artworkRetryCount - 1]
+            self.scriptQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self else { return }
+                if self.hasArtFlag { return }   // 已取到封面
+                let src = """
+                tell application "Music"
+                    try
+                        if player state is not stopped and exists artwork 1 of current track then
+                            return "yes"
+                        else
+                            return "no"
+                        end if
+                    end try
+                    return "no"
+                end tell
+                """
+                guard let d = self.runScript(src), d.stringValue == "yes" else { return }
+                self.fetchArtwork()
+            }
         }
     }
 

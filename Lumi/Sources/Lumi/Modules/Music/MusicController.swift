@@ -307,6 +307,16 @@ final class MusicController: ObservableObject {
         queueTitle = newTitle
         queueArtist = newArtist
 
+        // 按曲目记忆的校准偏移：offsetByTrack 仅允许在 scriptQueue 上访问
+        // （写侧 lyricsOffset didSet 也派发到 scriptQueue），故在派发主线程前先取值捕获，
+        // 消除原先主线程闭包直接读字典的跨线程竞争（与历史翻译缓存崩溃同款根因）。
+        var savedOffset: (key: String, value: TimeInterval)?
+        if trackChanged {
+            let rawKey = "\(newTitle)|\(newArtist)"
+            let key = rawKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? rawKey
+            savedOffset = (key, offsetByTrack[key] ?? 0)
+        }
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.title = newTitle
@@ -323,6 +333,7 @@ final class MusicController: ObservableObject {
             // 这些 @Published 属性改动必须回到主线程，否则 SwiftUI 在后台线程刷新可能崩溃（Data race）。
             if trackChanged {
                 let clearArt = !hasArt
+                let restore = savedOffset
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     self.lyrics = ""
@@ -330,10 +341,9 @@ final class MusicController: ObservableObject {
                     self.syncedLines = []
                     if clearArt { self.artwork = nil }
                     // 载入该曲目此前校准过的时间轴偏移（按曲目记忆，解决反复「时间轴不对」）
-                    let rawKey = "\(newTitle)|\(newArtist)"
-                    let key = rawKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? rawKey
-                    let savedOffset = self.offsetByTrack[key] ?? 0
-                    if savedOffset != self.lyricsOffset { self.lyricsOffset = savedOffset }
+                    if let restore = restore, restore.value != self.lyricsOffset {
+                        self.lyricsOffset = restore.value
+                    }
                 }
             }
         }
