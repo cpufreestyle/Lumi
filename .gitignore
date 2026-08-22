@@ -33,3 +33,5 @@ build.log
 
 # 工作记忆 / 编辑器运行时数据（非源码，不进版本库）
 .codebuddy/
+.codely/
+.codely-cli/
