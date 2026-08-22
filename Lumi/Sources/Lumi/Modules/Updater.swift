@@ -262,7 +262,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 // 302 -> Location 形如 .../releases/tag/v1.1.7
                 if let loc = http.allHeaderFields["Location"] as? String,
                    let url = URL(string: loc),
-                   let tag = self.versionFromReleasesURL(url) {
+                   let tag = Self.versionFromReleasesURL(url) {
                     self.log("HTML 302 重定向 → \(loc)，版本=\(tag)")
                     DispatchQueue.main.async {
                         self.applyLatest(tag: tag, htmlURL: url)
@@ -271,7 +271,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
                     return
                 }
                 // 200 且无重定向：可能直接返回了页面（无新版本或解析不到），尝试从页面抓版本
-                if let finalURL = http.url, let tag = self.versionFromReleasesURL(finalURL) {
+                if let finalURL = http.url, let tag = Self.versionFromReleasesURL(finalURL) {
                     self.log("HTML 200 直接解析版本=\(tag)（\(finalURL)）")
                     DispatchQueue.main.async {
                         self.applyLatest(tag: tag, htmlURL: finalURL)
@@ -287,7 +287,8 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     }
 
     /// 从 github.com/.../releases/tag/vX.Y.Z 这类 URL 取出版本号（去掉前缀 v）。
-    private func versionFromReleasesURL(_ url: URL) -> String? {
+    /// 静态纯函数，便于单元测试。
+    static func versionFromReleasesURL(_ url: URL) -> String? {
         let comps = url.pathComponents
         guard let idx = comps.firstIndex(of: "tag"), idx + 1 < comps.count else { return nil }
         let raw = comps[idx + 1]
@@ -310,7 +311,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             downloadURL = dl
             log("下载地址已拼接：\(dl.absoluteString)")
         }
-        if isNewer(latest, than: currentVersion) {
+        if Self.isNewer(latest, than: currentVersion) {
             status = .available
         } else {
             status = .upToDate
@@ -414,7 +415,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 break
             }
         }
-        if isNewer(latest, than: currentVersion) {
+        if Self.isNewer(latest, than: currentVersion) {
             status = .available
         } else {
             status = .upToDate
@@ -550,10 +551,13 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         } catch { /* 诊断日志写入失败不影响主流程 */ }
     }
 
-    /// 语义化比较：返回 lhs 是否比 rhs 新（按 a.b.c 数字逐段比较）
-    private func isNewer(_ lhs: String, than rhs: String) -> Bool {
+    /// 语义化比较：返回 lhs 是否比 rhs 新（按 a.b.c 数字逐段比较）。
+    /// 任一侧无法解析时返回 false（保守，不误报更新）——与 PluginManifest.isVersion 行为对齐。
+    /// 静态纯函数，便于单元测试。
+    static func isNewer(_ lhs: String, than rhs: String) -> Bool {
         let l = lhs.split(separator: ".").compactMap { Int($0) }
         let r = rhs.split(separator: ".").compactMap { Int($0) }
+        guard !l.isEmpty, !r.isEmpty else { return false }
         let count = max(l.count, r.count)
         for i in 0..<count {
             let lv = l.count > i ? l[i] : 0

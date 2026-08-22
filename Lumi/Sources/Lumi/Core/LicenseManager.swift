@@ -228,11 +228,13 @@ final class LicenseManager: ObservableObject {
         return try? Curve25519.Signing.PublicKey(rawRepresentation: raw)
     }()
 
-    /// 验证激活码（Ed25519 验签）
+    /// 验证激活码（Ed25519 验签）——静态纯函数（注入公钥与设备 ID，便于单元测试）。
     /// 格式: LUMI1-<payloadBase64>-<signatureBase64>
     ///   payload 为 JSON: {"v":1,"life":<Bool>,"exp":<Unix秒, life=true 时为0>,"n":<随机串>}
     /// 因为签名必须由持有私钥的服务端生成，本地无法伪造（替换原先的纯 CRC16 校验和）。
-    private func validateLicenseKey(_ key: String) -> Result<Date?, LicenseError> {
+    static func validateLicenseKey(_ key: String,
+                                   publicKey pub: Curve25519.Signing.PublicKey?,
+                                   currentDeviceID: String) -> Result<Date?, LicenseError> {
         let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines)
         let upper = normalized.uppercased()
 
@@ -256,7 +258,7 @@ final class LicenseManager: ObservableObject {
               let signature = Data(base64Encoded: parts[2]) else {
             return .failure(.invalidFormat)
         }
-        guard let pub = Self.licensePublicKey else {
+        guard let pub = pub else {
             // 公钥缺失属于打包错误，按验证失败处理，绝不放行
             return .failure(.verificationFailed)
         }
@@ -269,7 +271,7 @@ final class LicenseManager: ObservableObject {
         // 设备绑定（仅 LUMI2-）：payload 中的 dev 必须与本机 DeviceId 一致。
         // 此检查在验签之后，攻击者无法篡改 dev（改了签名即失效）。
         if prefix == "LUMI2", let boundDev = json["dev"] as? String {
-            guard boundDev == DeviceId.current else {
+            guard boundDev == currentDeviceID else {
                 return .failure(.deviceMismatch)
             }
         }
@@ -280,6 +282,11 @@ final class LicenseManager: ObservableObject {
             return .success(Date(timeIntervalSince1970: expTS))
         }
         return .failure(.invalid)
+    }
+
+    /// 实例入口：注入内置公钥与本机设备 ID 后走同一套纯函数逻辑。
+    private func validateLicenseKey(_ key: String) -> Result<Date?, LicenseError> {
+        Self.validateLicenseKey(key, publicKey: Self.licensePublicKey, currentDeviceID: DeviceId.current)
     }
 
     private func sha256(_ input: String) -> String {
@@ -333,19 +340,25 @@ final class LicenseManager: ObservableObject {
         }.resume()
     }
 
-    /// 解析并验签吊销清单，返回被吊销的 nonce 集合
-    private func parseRevocationList(_ raw: String) -> (Set<String>, TimeInterval)? {
+    /// 解析并验签吊销清单——静态纯函数（注入公钥，便于单元测试），返回被吊销的 nonce 集合
+    static func parseRevocationList(_ raw: String,
+                                     publicKey pub: Curve25519.Signing.PublicKey?) -> (Set<String>, TimeInterval)? {
         let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "-")
         guard parts.count == 3, parts[0].uppercased() == "LUMIRL",
               let payload = Data(base64Encoded: parts[1]),
               let signature = Data(base64Encoded: parts[2]),
-              let pub = Self.licensePublicKey,
+              let pub = pub,
               pub.isValidSignature(signature, for: payload) else { return nil }
         guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let entries = json["entries"] as? [[String: Any]] else { return nil }
         let nonces = Set(entries.compactMap { $0["n"] as? String })
         let ts = json["ts"] as? TimeInterval ?? 0
         return (nonces, ts)
+    }
+
+    /// 实例入口：注入内置公钥后走同一套纯函数逻辑。
+    private func parseRevocationList(_ raw: String) -> (Set<String>, TimeInterval)? {
+        Self.parseRevocationList(raw, publicKey: Self.licensePublicKey)
     }
 
     /// 从本地缓存恢复吊销清单（启动时使用，离线也可用上一次结果）
