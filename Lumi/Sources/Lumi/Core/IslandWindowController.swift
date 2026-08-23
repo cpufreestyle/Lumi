@@ -10,6 +10,7 @@ final class IslandWindowController: NSObject {
     private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
     private var mouseMonitor: Any?
+    private var mouseDownMonitor: Any?
     private var hideTimer: Timer?
     /// 记录上一次鼠标是否处于热区，用于区分"重新进入"与"停留在热区"
     private var wasInZone: Bool = false
@@ -121,6 +122,16 @@ final class IslandWindowController: NSObject {
             return ev
         }
 
+        // 全局/局部鼠标按下监控：在刘海（顶部中央热区）双击可切换胶囊固定状态，
+        // 提供不依赖胶囊按钮的快捷固定方式。需「辅助功能」权限（与 hover 一致）。
+        mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
+            self?.handleNotchDoubleClick(event: ev)
+        }
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
+            self?.handleNotchDoubleClick(event: ev)
+            return ev
+        }
+
         // 菜单栏图标：即使没有辅助功能权限，也能看到应用并手动唤出动态岛
         setupStatusItem()
 
@@ -225,7 +236,7 @@ final class IslandWindowController: NSObject {
         // 立即收起，避免在其他屏顶部误触发面板。
         guard screen.frame.contains(mouse) else {
             wasInZone = false
-            if AppState.shared.islandEnabled { hideIsland() }
+            if AppState.shared.islandEnabled, !AppState.shared.islandPinned { hideIsland() }
             return
         }
 
@@ -248,8 +259,19 @@ final class IslandWindowController: NSObject {
             return
         }
 
-        // 严格 hover 态：鼠标在刘海热区（含已显示的胶囊窗口内）才显示，
-        // 离开即安排收起——保证「鼠标没有碰到刘海时绝不出现胶囊」。
+        // 固定常驻：鼠标离开热区不自动收起，但进入热区（从其他区域移回）仍自动显示。
+        // 默认 islandPinned=false（仅 hover 才出现），由「双击刘海」开启。
+        guard !AppState.shared.islandPinned else {
+            wasInZone = inZone
+            if inZone {
+                hideTimer?.invalidate(); hideTimer = nil
+                if window?.isVisible != true { showIsland() }
+            }
+            return
+        }
+
+        // 普通 hover 态：鼠标在刘海热区（含已显示的胶囊窗口内）才显示，
+        // 离开即安排收起——保证「未固定时鼠标没碰到刘海绝不出现胶囊」。
         wasInZone = inZone
         if inZone {
             hideTimer?.invalidate(); hideTimer = nil
@@ -262,6 +284,11 @@ final class IslandWindowController: NSObject {
 
     private func scheduleHide() {
         guard AppState.shared.isExpanded == false else { return }
+        // 锁定常驻：已钉住则不安排收起，胶囊保持显示
+        guard !AppState.shared.islandPinned else {
+            hideTimer?.invalidate(); hideTimer = nil
+            return
+        }
         // 鼠标仍在胶囊（窗口）内时绝不安排自动收起，避免"还没离开胶囊就消失"。
         if window?.isVisible == true, window?.frame.contains(NSEvent.mouseLocation) == true {
             hideTimer?.invalidate(); hideTimer = nil
@@ -378,6 +405,42 @@ final class IslandWindowController: NSObject {
             wasInZone = false
             evaluateHotZone()
             statusToggleItem?.title = "隐藏动态岛"
+        }
+    }
+
+    /// 双击刘海（顶部中央热区）切换胶囊固定状态。
+    /// 双击判定依赖 `NSEvent.clickCount == 2`；热区复用 `notchHotZone(for:)`，
+    /// 仅当鼠标落在刘海/外接热区内才触发，避免在菜单栏其它区域双击误触。
+    private func handleNotchDoubleClick(event: NSEvent) {
+        guard event.clickCount == 2 else { return }
+        let point = NSEvent.mouseLocation
+        // 复用缓存的屏幕与热区，避免每次点击都枚举屏幕。
+        guard let (_, zone) = activeScreenAndZone() else { return }
+        guard zone.contains(point) else { return }
+        // 切换固定：未固定→钉住常驻并立即弹出胶囊（视觉反馈），
+        // 已固定→取消固定并收起。
+        togglePin()
+    }
+
+    /// 取消固定：解除常驻锁定并立即收起胶囊，符合"取消固定即消失"的预期。
+    /// 之后鼠标移到刘海热区可再次唤出（普通 hover 态），单击即可展开总面板。
+    func unpinIsland() {
+        AppState.shared.islandPinned = false
+        hideIsland()
+    }
+
+    /// 固定：常驻显示胶囊（鼠标移开不再收起）。若当前已隐藏则立即唤出。
+    func pinIsland() {
+        AppState.shared.islandPinned = true
+        showIsland()
+    }
+
+    /// 切换固定状态：未固定时点击即可固定常驻，已固定时取消固定。
+    func togglePin() {
+        if AppState.shared.islandPinned {
+            unpinIsland()
+        } else {
+            pinIsland()
         }
     }
 
