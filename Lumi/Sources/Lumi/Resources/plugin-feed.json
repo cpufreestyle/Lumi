@@ -1,18 +1,22 @@
 {
-  "schemaVersion": 1,
-  "plugins": [
+  "plugins" : [
     {
-      "id": "com.lumi.sample-plugin",
-      "name": "示例插件（天气）",
-      "iconName": "cloud.sun",
-      "urlScheme": "lumi-sample",
-      "appName": "LumiSamplePlugin.app",
-      "panelHint": "演示第三方 app 接入灵动岛",
-      "minHostVersion": "1.1.9",
-      "downloadURL": "https://github.com/cpufreestyle/Lumi/releases/download/v1.1.9/LumiSamplePlugin.app.zip",
-      "permissions": [
-        { "type": "network", "reason": "获取天气数据" }
-      ]
+      "appName" : "LumiSamplePlugin.app",
+      "downloadURL" : "https:\/\/github.com\/cpufreestyle\/Lumi\/releases\/download\/v1.1.9\/LumiSamplePlugin.app.zip",
+      "iconName" : "cloud.sun",
+      "id" : "com.lumi.sample-plugin",
+      "minHostVersion" : "1.1.9",
+      "name" : "示例插件（天气）",
+      "panelHint" : "演示第三方 app 接入灵动岛",
+      "permissions" : [
+        {
+          "reason" : "获取天气数据",
+          "type" : "network"
+        }
+      ],
+      "urlScheme" : "lumi-sample"
     }
-  ]
+  ],
+  "schemaVersion" : 1,
+  "signature" : "XYvWsymi\/NQ7G\/VxGSPo6OZHZuuT2On8oFT00hp2sqiJLDnO+dxe0Lqq8rv2ZlXyYrgV+Ki8vvtz96o2XKzrBA=="
 }

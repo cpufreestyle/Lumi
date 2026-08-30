@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import AppKit
 import Combine
 
@@ -157,15 +158,21 @@ final class PluginMarketplace: NSObject, ObservableObject {
         let collectLock = NSLock()
         var collected: [[PluginManifest]] = []
         for url in sources {
+            // 官方源强制验签：签名缺失或无效的官方源一律拒绝，
+            // 防止 MITM 剥掉签名字段后塞入伪造清单；社区源「有签名则验、无签名放行」。
+            let isOfficial = (url == officialFeedURL)
             group.enter()
             let task = session.dataTask(with: url) { data, _, _ in
                 defer { group.leave() }
-                if let data = data,
-                   let feed = try? JSONDecoder().decode(PluginFeed.self, from: data) {
-                    collectLock.lock()
-                    collected.append(feed.plugins)
-                    collectLock.unlock()
-                }
+                guard let data = data,
+                      let feed = try? JSONDecoder().decode(PluginFeed.self, from: data) else { return }
+                let state = PluginMarketplace.feedSignatureState(
+                    rawData: data, publicKey: Self.officialFeedPublicKey)
+                let accepted = isOfficial ? (state == .valid) : (state != .invalid)
+                guard accepted else { return }
+                collectLock.lock()
+                collected.append(feed.plugins)
+                collectLock.unlock()
             }
             task.resume()
         }
@@ -389,4 +396,48 @@ struct PluginFeed: Codable {
     let schemaVersion: Int?
     /// 插件列表
     let plugins: [PluginManifest]
+    /// Ed25519 签名（对 canonical 化后的 plugins 数组）；社区源可不带
+    let signature: String?
+}
+
+extension PluginMarketplace {
+
+    // MARK: - Feed 签名校验（v1.2，独立于激活码密钥对）
+    // 私钥只存在 license-tool 的 secrets/feed_signing_private_key.b64，
+    // 通过 `swift run license-tool sign-feed <path>` 签发；App 内仅有公钥。
+
+    /// 官方源 feed 的 Ed25519 公钥。与激活码公钥分离：即使 feed 签名私钥泄露，
+    /// 也不能伪造激活码；反之亦然。
+    nonisolated static let officialFeedPublicKey: Curve25519.Signing.PublicKey? = {
+        let b64 = "C9znoK2J7aR1H+lRGQhxaIDnBRnbmKVmxC2efo4QVTI="
+        guard let raw = Data(base64Encoded: b64) else { return nil }
+        return try? Curve25519.Signing.PublicKey(rawRepresentation: raw)
+    }()
+
+    /// feed 签名校验结果
+    enum FeedSignatureState { case valid, invalid, missing }
+
+    /// 规范化 plugins 数组：签名与验签两侧必须产出完全相同的字节。
+    /// 双方都对原始 JSON 里的 plugins 数组用 JSONSerialization + .sortedKeys
+    /// 重新序列化（不经过 struct 编解码），保证跨实现字节一致。
+    nonisolated static func canonicalPluginsData(from rawData: Data) -> Data? {
+        guard let obj = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any],
+              let plugins = obj["plugins"] else { return nil }
+        return try? JSONSerialization.data(withJSONObject: plugins, options: [.sortedKeys])
+    }
+
+    /// 校验 feed 数据的 Ed25519 签名（注入公钥便于单元测试）。
+    /// 顶层 `signature` 字段缺失返回 .missing（社区源放行、官方源不放行）。
+    nonisolated static func feedSignatureState(rawData: Data,
+                                   publicKey: Curve25519.Signing.PublicKey?) -> FeedSignatureState {
+        guard let obj = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] else {
+            return .invalid
+        }
+        guard let sigB64 = obj["signature"] as? String else { return .missing }
+        guard let sig = Data(base64Encoded: sigB64),
+              let canonical = canonicalPluginsData(from: rawData),
+              let pub = publicKey,
+              pub.isValidSignature(sig, for: canonical) else { return .invalid }
+        return .valid
+    }
 }

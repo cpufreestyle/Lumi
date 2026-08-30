@@ -12,6 +12,9 @@
 //    swift run license-tool gen-legacy             生成旧版 CRC16 激活码（LUMI-XXXX-...，仅测试）
 //    swift run license-tool redeem --old-key <旧码> --order <订单号> --device <设备ID> [--months N | --lifetime]
 //                                               旧码换发，签发绑定设备的新码（LUMI2-）
+//    swift run license-tool revoke-list <path>    生成/更新签名吊销清单（secrets/revocations.lumi）
+//    swift run license-tool gen-feed-key          生成市场 feed 签名密钥对（独立于激活码密钥）
+//    swift run license-tool sign-feed <path>      对插件市场 feed JSON 签名（写入 signature 字段）
 //    LUMI_LICENSE_PRIVATE_KEY=<b64> swift run license-tool gen ...
 //    订单白名单（生产必设）：export LUMI_VALID_ORDERS=ORD-001,ORD-002
 // =====================================================
@@ -37,6 +40,10 @@ struct LicenseTool {
             print(key.publicKey.rawRepresentation.base64EncodedString())
         case "revoke-list":
             revokeList(args: Array(arguments.dropFirst()))
+        case "gen-feed-key":
+            generateFeedKeyPair()
+        case "sign-feed":
+            signFeed(args: Array(arguments.dropFirst()))
         default:
             printUsage()
         }
@@ -65,6 +72,73 @@ struct LicenseTool {
         print("---------------------------------------------------------------")
         print("【私钥】务必离线保管，切勿提交或打包进 App：")
         print(privB64)
+    }
+
+    // MARK: - Feed 签名（市场插件清单，独立于激活码密钥对）
+
+    private var feedPrivateKeyURL: URL {
+        URL(fileURLWithPath: "secrets/feed_signing_private_key.b64")
+    }
+
+    private func generateFeedKeyPair() {
+        let key = Curve25519.Signing.PrivateKey()
+        let privB64 = key.rawRepresentation.base64EncodedString()
+        let pubB64 = key.publicKey.rawRepresentation.base64EncodedString()
+        do {
+            try FileManager.default.createDirectory(at: feedPrivateKeyURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try privB64.write(to: feedPrivateKeyURL, atomically: true, encoding: .utf8)
+            print("✅ feed 签名私钥已写入: \(feedPrivateKeyURL.path)")
+        } catch {
+            fputs("⚠️ 无法写入私钥文件（\(error)），请手动保存下面的私钥。\n", stderr)
+        }
+        print("")
+        print("----- 请将以下【公钥】嵌入 PluginMarketplace.officialFeedPublicKey -----")
+        print(pubB64)
+        print("-----------------------------------------------------------------------")
+    }
+
+    private func loadFeedPrivateKey() -> Curve25519.Signing.PrivateKey? {
+        if let env = ProcessInfo.processInfo.environment["LUMI_FEED_SIGNING_PRIVATE_KEY"],
+           let raw = Data(base64Encoded: env) {
+            return try? Curve25519.Signing.PrivateKey(rawRepresentation: raw)
+        }
+        guard let b64 = try? String(contentsOf: feedPrivateKeyURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              let raw = Data(base64Encoded: b64) else { return nil }
+        return try? Curve25519.Signing.PrivateKey(rawRepresentation: raw)
+    }
+
+    /// 对插件市场 feed 签名：canonical 化 plugins 数组（JSONSerialization + .sortedKeys，
+    /// 与 App 侧 PluginMarketplace.canonicalPluginsData 完全一致）后 Ed25519 签名，
+    /// 将 signature 字段写回原文件（prettyPrinted + sortedKeys 格式化输出）。
+    private func signFeed(args: [String]) {
+        guard let path = args.first else {
+            fputs("用法: swift run license-tool sign-feed <plugin-feed.json>\n", stderr)
+            return
+        }
+        guard let key = loadFeedPrivateKey() else {
+            fputs("❌ 未找到 feed 签名私钥。请先运行 `swift run license-tool gen-feed-key` 生成，\n   或设置环境变量 LUMI_FEED_SIGNING_PRIVATE_KEY=<私钥base64>。\n", stderr)
+            return
+        }
+        let url = URL(fileURLWithPath: path)
+        do {
+            let raw = try Data(contentsOf: url)
+            guard var obj = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
+                  let plugins = obj["plugins"] else {
+                fputs("❌ \(path) 不是合法的 feed JSON（缺少 plugins 数组）。\n", stderr)
+                return
+            }
+            let canonical = try JSONSerialization.data(withJSONObject: plugins, options: [.sortedKeys])
+            let sig = try key.signature(for: canonical)
+            obj["signature"] = sig.base64EncodedString()
+            let out = try JSONSerialization.data(withJSONObject: obj,
+                                                 options: [.prettyPrinted, .sortedKeys])
+            try out.write(to: url, options: .atomic)
+            print("✅ 已签名并写回: \(url.path)")
+        } catch {
+            fputs("❌ 签名失败: \(error)\n", stderr)
+        }
     }
 
     // MARK: - 读取私钥
