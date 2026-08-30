@@ -244,7 +244,7 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             completion()
             return
         }
-        var htmlReq = URLRequest(url: htmlURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        let htmlReq = URLRequest(url: htmlURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
 
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
@@ -551,21 +551,10 @@ final class Updater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         } catch { /* 诊断日志写入失败不影响主流程 */ }
     }
 
-    /// 语义化比较：返回 lhs 是否比 rhs 新（按 a.b.c 数字逐段比较）。
-    /// 任一侧无法解析时返回 false（保守，不误报更新）——与 PluginManifest.isVersion 行为对齐。
-    /// 静态纯函数，便于单元测试。
+    /// 语义化比较：返回 lhs 是否比 rhs 新。委托给 PluginManifest.isVersion
+    /// （同一套逐段数字比较 + 不可解析保守返回 false），避免两份实现漂移。
     static func isNewer(_ lhs: String, than rhs: String) -> Bool {
-        let l = lhs.split(separator: ".").compactMap { Int($0) }
-        let r = rhs.split(separator: ".").compactMap { Int($0) }
-        guard !l.isEmpty, !r.isEmpty else { return false }
-        let count = max(l.count, r.count)
-        for i in 0..<count {
-            let lv = l.count > i ? l[i] : 0
-            let rv = r.count > i ? r[i] : 0
-            if lv > rv { return true }
-            if lv < rv { return false }
-        }
-        return false
+        PluginManifest.isVersion(lhs, newerThan: rhs)
     }
 }
 
