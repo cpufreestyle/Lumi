@@ -224,6 +224,18 @@ app.post('/api/redeem', (req, res) => {
     return res.status(400).type('text/plain').send('oldKey、order、device 均为必填');
   }
 
+  // CLI 选项注入防线：execFile 虽不经 shell 解析，但这些值会作为 license-tool
+  // 的命令行参数传递——以 '-' 开头的值可能被其手动参数解析器当作选项吞掉。
+  // 服务端先做字符集与长度白名单，拒绝任何可被解释为选项的值。
+  const isSafeArg = (v) => {
+    const s = String(v);
+    return s.length > 0 && s.length <= 200 && !s.startsWith('-');
+  };
+  if (!isSafeArg(oldKey) || !isSafeArg(order) || !isSafeArg(device) ||
+      (nonce !== undefined && !isSafeArg(nonce))) {
+    return res.status(400).type('text/plain').send('参数格式非法');
+  }
+
   // 读取本地 Ed25519 私钥（与 license-tool 同源；生产环境应置于独立后端服务）
   const keyPath = path.join(__dirname, 'Lumi', 'secrets', 'license_private_key.b64');
   let keyB64 = '';
@@ -235,12 +247,14 @@ app.post('/api/redeem', (req, res) => {
   const env = { ...process.env, LUMI_LICENSE_PRIVATE_KEY: keyB64 };
   if (process.env.LUMI_VALID_ORDERS) env.LUMI_VALID_ORDERS = process.env.LUMI_VALID_ORDERS;
   if (process.env.LUMI_DEVICE_LIMIT) env.LUMI_DEVICE_LIMIT = process.env.LUMI_DEVICE_LIMIT;
+  // 换发参数经环境变量传递（license-tool 支持 env 回退）：
+  // argv 不再包含任何动态值，从根源消除 CLI 选项注入（CWE-88）。
+  env.LUMI_REDEEM_OLD_KEY = String(oldKey);
+  env.LUMI_REDEEM_ORDER = String(order);
+  env.LUMI_REDEEM_DEVICE = String(device);
+  if (nonce) env.LUMI_REDEEM_NONCE = String(nonce);
 
-  const args = ['run', 'license-tool', 'redeem',
-    '--old-key', String(oldKey), '--order', String(order),
-    '--device', String(device), '--lifetime'];
-  // 透传客户端防重放 nonce（与 license-tool 的 redeem_state 防重放配合）
-  if (nonce) args.push('--nonce', String(nonce));
+  const args = ['run', 'license-tool', 'redeem', '--lifetime'];
   execFile('swift', args, { cwd: path.join(__dirname, 'Lumi'), env, timeout: 180000 },
     (err, stdout, stderr) => {
       if (err) {

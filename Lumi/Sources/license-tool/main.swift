@@ -293,6 +293,15 @@ struct LicenseTool {
             i += 1
         }
 
+        // 服务端(CGI/HTTP handler)调用场景:参数经环境变量传入,
+        // 避免 argv 注入(CWE-88)。CLI 交互用法不受影响。
+        if oldKey == nil || order == nil || device == nil {
+            let env = ProcessInfo.processInfo.environment
+            oldKey = oldKey ?? env["LUMI_REDEEM_OLD_KEY"]
+            order = order ?? env["LUMI_REDEEM_ORDER"]
+            device = device ?? env["LUMI_REDEEM_DEVICE"]
+            if nonce == nil { nonce = env["LUMI_REDEEM_NONCE"] }
+        }
         guard let oldKey, let order, let device else {
             fputs("❌ 用法: license-tool redeem --old-key <旧码> --order <订单号> --device <设备ID> [--nonce <uuid>] [--device-limit N] [--months N | --lifetime]\n", stderr)
             exit(1)

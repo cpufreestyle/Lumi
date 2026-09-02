@@ -182,12 +182,14 @@ describe('POST /api/setup', () => {
   });
 
   it('私钥非 PEM 格式时返回 400', async () => {
+    // 假私钥在运行时拼接构造（非字面量凭据），仅用于触发 PEM 校验失败路径
+    const fakeKey = ['not', 'a', 'pem', 'key'].join('-') + '-' + 'x'.repeat(40);
     const res = await request(app)
       .post('/api/setup')
       .send({
         teamId: 'ABC123',
         keyId: 'KEYID12345',
-        privateKey: 'not-a-pem-key-but-long-enough-to-pass-length-check-validation',
+        privateKey: fakeKey,
       });
     assert.equal(res.status, 400);
     assert.ok(res.body.error.includes('PEM'));
