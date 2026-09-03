@@ -278,13 +278,19 @@ final class PluginMarketplace: NSObject, ObservableObject {
 
     // MARK: - 内部：完成下载后处理
 
-    private func finishInstall(pluginID: String, manifest: PluginManifest?, location: URL) {
+    /// 安装重活（解压/定位/去隔离/落位）——纯文件与子进程操作，
+    /// 非隔离静态函数，在后台线程执行；主线程只收结果更新 UI 状态。
+    /// 避免 ditto 同步 waitUntilExit 把灵动岛 UI 卡死数秒。
+    nonisolated private static func performInstallWork(
+        manifest: PluginManifest?, location: URL, destDir: URL
+    ) -> Result<Void, Error> {
         let fm = FileManager.default
         let workDir = fm.temporaryDirectory
-            .appendingPathComponent("lumi_plugin_install_\(pluginID)")
+            .appendingPathComponent("lumi_plugin_install_\(UUID().uuidString)")
         do {
             try? fm.removeItem(at: workDir)
             try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: workDir) }
             let zipURL = workDir.appendingPathComponent("plugin.zip")
             try fm.moveItem(at: location, to: zipURL)
 
@@ -308,19 +314,33 @@ final class PluginMarketplace: NSObject, ObservableObject {
             xattr.arguments = ["-dr", "com.apple.quarantine", newApp.path]
             try? xattr.run(); xattr.waitUntilExit()
 
-            try fm.createDirectory(at: pluginsDir, withIntermediateDirectories: true)
-            let dest = pluginsDir.appendingPathComponent(newApp.lastPathComponent)
+            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+            let dest = destDir.appendingPathComponent(newApp.lastPathComponent)
             try? fm.removeItem(at: dest)
             try fm.moveItem(at: newApp, to: dest)
-
-            DispatchQueue.main.async { [weak self] in
-                self?.installState[pluginID] = .installed
-                self?.installProgress[pluginID] = 1
-                self?.refreshInstalled()
-            }
+            return .success(())
         } catch {
-            DispatchQueue.main.async { [weak self] in
-                self?.installState[pluginID] = .failed(error.localizedDescription)
+            return .failure(error)
+        }
+    }
+
+    private func finishInstall(pluginID: String, manifest: PluginManifest?, location: URL) {
+        // 先在主线程置「安装中」，随后重活全部移交后台
+        installState[pluginID] = .installing
+        let destDir = pluginsDir
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = Self.performInstallWork(
+                manifest: manifest, location: location, destDir: destDir)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.installState[pluginID] = .installed
+                    self.installProgress[pluginID] = 1
+                    self.refreshInstalled()
+                case .failure(let error):
+                    self.installState[pluginID] = .failed(error.localizedDescription)
+                }
             }
         }
     }
