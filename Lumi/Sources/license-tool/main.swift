@@ -201,7 +201,10 @@ struct LicenseTool {
             "exp": Int(exp),
             "n": nonce
         ]
-        return try! JSONSerialization.data(withJSONObject: dict)
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else {
+            fputs("❌ 许可证载荷序列化失败\n", stderr); exit(1)
+        }
+        return data
     }
 
     // MARK: - 旧版激活码生成（仅工具侧，用于测试与向后兼容演示；不进 App）
@@ -358,7 +361,9 @@ struct LicenseTool {
             "v": 2, "life": lifetime, "exp": Int(exp),
             "n": freshNonce, "dev": device
         ]
-        let payload = try! JSONSerialization.data(withJSONObject: dict)
+        guard let payload = try? JSONSerialization.data(withJSONObject: dict) else {
+            fputs("❌ 许可证载荷序列化失败\n", stderr); exit(1)
+        }
         let signature: Data
         do { signature = try key.signature(for: payload) }
         catch { fputs("❌ 签名失败: \(error)\n", stderr); exit(1) }
@@ -472,7 +477,9 @@ struct LicenseTool {
         let now = Int(Date().timeIntervalSince1970)
         let entries: [[String: Any]] = nonces.map { ["n": $0, "ts": now, "reason": reason] }
         let dict: [String: Any] = ["v": 1, "ts": now, "entries": entries]
-        let payload = try! JSONSerialization.data(withJSONObject: dict)
+        guard let payload = try? JSONSerialization.data(withJSONObject: dict) else {
+            fputs("❌ 许可证载荷序列化失败\n", stderr); exit(1)
+        }
         let key = loadPrivateKey()
         let signature: Data
         do { signature = try key.signature(for: payload) }

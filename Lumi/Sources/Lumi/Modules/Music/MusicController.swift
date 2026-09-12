@@ -128,8 +128,11 @@ final class MusicController: ObservableObject {
 
     enum PlaybackState { case playing, paused, stopped }
 
-    private var timer: Timer?
     private var lastTrackKey: String = ""
+    /// Music 运行态判断缓存（避免每个调度拍都枚举进程列表）
+    private var musicRunningCache: (value: Bool, at: Date)?
+    /// Music 播放状态广播监听令牌（deinit 时注销）
+    private var playbackObserver: NSObjectProtocol?
     /// 已「成功」取到歌词的曲目集合，避免重复请求（仅在 scriptQueue 上访问）。
     /// 注意：失败不写入此集合，以便后续周期重试。
     var onlineSearchedKeys = Set<String>()
@@ -225,7 +228,7 @@ final class MusicController: ObservableObject {
         offsetByTrack = UserDefaults.standard.dictionary(forKey: offsetByTrackKey) as? [String: TimeInterval] ?? [:]
         let savedBilingual = UserDefaults.standard.object(forKey: bilingualKey) as? Int ?? BilingualMode.auto.rawValue
         bilingualMode = BilingualMode(rawValue: savedBilingual) ?? .auto
-        startTimer()
+        startPolling()
         loadVolumeIfNeeded()
         loadTranslationCache()
         selectedTranslateModelID = UserDefaults.standard.string(forKey: translateModelKey)
@@ -233,11 +236,67 @@ final class MusicController: ObservableObject {
         refreshVolume()
     }
 
-    private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+    // MARK: - 轮询调度（按需）
+
+    /// 原实现为 1.5s 常驻 Timer 无条件执行 `tell application "Music"` 的 AppleScript，存在两个问题：
+    /// 1. 即使 Music 从未运行也持续跨进程调用，白白消耗 CPU/电量；
+    /// 2. AppleScript 的 `tell application X` 在目标未运行时**会启动该应用**，
+    ///    导致用户退出 Music 后又被 Lumi 每 1.5s 重新拉起，Music 根本退不掉。
+    ///
+    /// 现改为按需：Music 未运行时完全不轮询；播放中 1.5s（跟进度），暂停/停止降到 8s 兜底；
+    /// 并用 DistributedNotificationCenter 在播放/暂停/切歌时立即刷新，实时性不依赖轮询频率。
+    private func startPolling() {
+        setupPlaybackNotifications()
+        PollingCoordinator.shared.register(
+            id: "music.playback",
+            interval: { [weak self] in self?.pollInterval() ?? 0 },
+            action: { [weak self] in self?.fetchInfo() }
+        )
+        fetchInfo()
+    }
+
+    /// 当前期望的轮询间隔（秒）；返回 `<= 0` 表示无需轮询。
+    private func pollInterval() -> TimeInterval {
+        // Music 未运行：完全不轮询（既省跨进程开销，也避免把 Music 重新拉起）
+        guard isMusicRunning() else { return 0 }
+        switch playbackState {
+        case .playing: return 1.5   // 跟播放进度
+        case .paused:  return 8.0   // 低频兜底：检测手动切歌等未广播的变化
+        case .stopped: return 8.0
+        }
+    }
+
+    /// Music 是否正在运行（带 1s 缓存，避免每个调度拍都枚举进程列表）。
+    private func isMusicRunning() -> Bool {
+        let now = Date()
+        if let cached = musicRunningCache, now.timeIntervalSince(cached.at) < 1.0 {
+            return cached.value
+        }
+        let running = NSWorkspace.shared.runningApplications.contains {
+            $0.bundleIdentifier == "com.apple.Music"
+        }
+        musicRunningCache = (running, now)
+        return running
+    }
+
+    /// 播放状态变化（播放/暂停/切歌）由系统广播，收到即刷新——
+    /// 这样「按需轮询」不必靠提高频率来换取实时性。
+    private func setupPlaybackNotifications() {
+        playbackObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.Music.playerInfo"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // 能收到 Music 的广播即说明它正在运行，顺带修正运行态缓存
+            self?.musicRunningCache = (true, Date())
             self?.fetchInfo()
         }
-        fetchInfo()
+    }
+
+    deinit {
+        if let observer = playbackObserver {
+            DistributedNotificationCenter.default().removeObserver(observer)
+        }
     }
 
     // MARK: - AppleScript 执行

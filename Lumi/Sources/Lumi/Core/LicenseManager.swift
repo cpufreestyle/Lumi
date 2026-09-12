@@ -66,7 +66,10 @@ final class LicenseManager: ObservableObject {
     private let trialDays = 7
 
     private init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // Application Support 目录理论上必然存在，仍回退到标准路径，避免强制解包崩溃
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                 .appendingPathComponent("Library/Application Support")
         let lumiDir = appSupport.appendingPathComponent("Lumi")
         try? FileManager.default.createDirectory(at: lumiDir, withIntermediateDirectories: true)
         licenseFileURL = lumiDir.appendingPathComponent("license.dat")

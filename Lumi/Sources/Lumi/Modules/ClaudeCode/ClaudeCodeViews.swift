@@ -75,7 +75,7 @@ final class ClaudeCodeController: ObservableObject {
         // 关键约束：Messages API 要求消息以 user 开头、user/assistant 严格交替。
         // 开场白(isGreeting)是纯 UI 提示，必须从历史中剔除，否则首条真实消息
         // 会带着一条 assistant 开场白 -> 首条即为 assistant -> API 报 400。
-        var apiMessages = buildAPIMessages(currentUser: userMsg)
+        let apiMessages = buildAPIMessages(currentUser: userMsg)
 
         let body: [String: Any] = [
             "model": model,
@@ -243,7 +243,8 @@ struct ClaudeCodeExpandedView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
-                .onChange(of: cc.messages.count) { _ in
+                // macOS 14 起 onChange(of:perform:) 已废弃，改用零参数闭包形式
+                .onChange(of: cc.messages.count) {
                     if let last = cc.messages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
@@ -337,8 +338,8 @@ struct CCMessageBubble: View {
 
 // MARK: - 加载气泡
 struct CCLoadingBubble: View {
-    @State private var dotCount: Int = 0
-    @State private var timer: Timer?
+    /// 省略号每次跳动的间隔（秒）
+    private static let dotInterval: TimeInterval = 0.4
 
     var body: some View {
         HStack(alignment: .top) {
@@ -347,21 +348,18 @@ struct CCLoadingBubble: View {
                 .foregroundColor(.purple.opacity(0.7))
                 .frame(width: 22, height: 22)
                 .background(Circle().fill(Color.purple.opacity(0.15)))
-            Text(String(repeating: ".", count: (dotCount % 3) + 1))
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.4))
-                .padding(10)
-                .background(Color.white.opacity(0.06))
-                .cornerRadius(10)
-        }
-        .onAppear {
-            // 持有 timer 并停止旧的，避免每次出现都泄漏一个永不停止的定时器
-            timer?.invalidate()
-            timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [self] t in
-                dotCount += 1
-                if dotCount > 100 { t.invalidate() }
+            // 用 TimelineView 取代原先 0.4s 的 Timer + @State 计数：
+            // 去掉定时器对 self 的持有与每 0.4s 一次的无谓 body 重算，
+            // 动画节奏交给 SwiftUI 调度，随视图生命周期自动起停。
+            TimelineView(.periodic(from: .now, by: Self.dotInterval)) { timeline in
+                let step = Int(timeline.date.timeIntervalSince1970 / Self.dotInterval)
+                Text(String(repeating: ".", count: (step % 3) + 1))
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.4))
+                    .padding(10)
+                    .background(Color.white.opacity(0.06))
+                    .cornerRadius(10)
             }
         }
-        .onDisappear { timer?.invalidate() }
     }
 }

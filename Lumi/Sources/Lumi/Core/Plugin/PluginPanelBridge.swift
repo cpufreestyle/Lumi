@@ -80,11 +80,12 @@ final class PluginPanelBridge: ObservableObject {
     /// 共享目录（宿主管理，插件可写）
     nonisolated static let panelsDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask).first!
+                                            in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                 .appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("Lumi/PluginPanels", isDirectory: true)
     }()
 
-    private var timer: Timer?
     /// 面板文件轮询专用后台队列:磁盘读取与 JSON 解码不占主线程,消除每秒一次的主线程 I/O。
     private let pollQueue = DispatchQueue(label: "com.lumi.pluginpanels.poll", qos: .utility)
     /// 当前需要轮询的插件 id 集合（由 PluginDiscovery 扫描带 panel 的插件后设置）
@@ -129,26 +130,44 @@ final class PluginPanelBridge: ObservableObject {
     }
 
     private func startPollingIfNeeded() {
-        guard !watchedIDs.isEmpty else { timer?.invalidate(); timer = nil; return }
-        guard timer == nil else { return }
-        // 1s 轮询：轻量、对第三方 app 无反向调用压力，也避免 XPC 连接管理复杂度。
-        // 读取/解码在后台队列进行，主线程仅在数据变化时合并写回——
-        // 原实现每秒在主线程同步读文件、且无条件写 @Published 字典，
-        // 会造成常驻 1Hz 的主线程 I/O 与 SwiftUI 重渲染。
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        // 无插件面板可看时彻底停止轮询
+        guard !watchedIDs.isEmpty else {
+            PollingCoordinator.shared.unregister(id: "pluginPanels.poll")
+            return
+        }
+        // 按需轮询：插件面板/市场可见时 1s 保证实时，不可见时降到 15s 兜底，
+        // 避免第三方插件从未被查看时仍常驻 1Hz 磁盘读取。
+        // 读取/解码在后台队列进行，主线程仅在数据变化时合并写回。
+        PollingCoordinator.shared.register(
+            id: "pluginPanels.poll",
+            interval: { Self.pollInterval() },
+            action: { [weak self] in
+                Task { @MainActor in self?.pollOnce() }
+            }
+        )
+    }
+
+    /// 当前期望的轮询间隔（秒）。仅读非隔离的 AppState，故标记为 nonisolated。
+    nonisolated private static func pollInterval() -> TimeInterval {
+        let state = AppState.shared
+        let visible = state.isExpanded &&
+            (state.selectedPluginPanelID != nil || state.showPluginMarket)
+        return visible ? 1.0 : 15.0
+    }
+
+    /// 读一轮面板文件：后台队列解码，主线程仅在数据变化时写回。
+    private func pollOnce() {
+        guard !watchedIDs.isEmpty else { return }
+        let ids = Array(watchedIDs)
+        pollQueue.async { [weak self] in
+            let results = ids.map { (id: $0, panel: Self.readPanelFile($0)) }
             Task { @MainActor in
-                guard let self = self, !self.watchedIDs.isEmpty else { return }
-                let ids = Array(self.watchedIDs)
-                self.pollQueue.async {
-                    let results = ids.map { (id: $0, panel: Self.readPanelFile($0)) }
-                    Task { @MainActor in
-                        for r in results {
-                            if let p = r.panel {
-                                if self.panels[r.id] != p { self.panels[r.id] = p }
-                            } else if self.panels[r.id] != nil {
-                                self.panels[r.id] = nil
-                            }
-                        }
+                guard let self = self else { return }
+                for r in results {
+                    if let p = r.panel {
+                        if self.panels[r.id] != p { self.panels[r.id] = p }
+                    } else if self.panels[r.id] != nil {
+                        self.panels[r.id] = nil
                     }
                 }
             }

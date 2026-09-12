@@ -171,7 +171,7 @@ extension MusicController {
             guard let self = self else { return }
             if let err = err {
                 self.lyricLog("候选[\(index)]网络错误 artist=\(c.artist) track=\(c.track) err=\(err.localizedDescription)")
-            } else if data == nil || data!.isEmpty {
+            } else if (data?.isEmpty ?? true) {
                 self.lyricLog("候选[\(index)]返回空 data artist=\(c.artist) track=\(c.track)")
             }
             // 按与当前曲目的相似度挑选，而不是无脑取第一条，避免同名歌串词
@@ -223,7 +223,7 @@ extension MusicController {
             if synced.isEmpty, plain.isEmpty { continue }
             let score = matchScore(d, expectTitle: expectTitle, expectArtist: expectArtist)
             if score < 0 { continue }   // 歌名对不上，直接排除
-            if best == nil || score > best!.score {
+            if best.map({ score > $0.score }) ?? true {
                 best = (score, synced, plain)
             }
         }
@@ -327,7 +327,9 @@ extension MusicController {
         guard !original.isEmpty, !translated.isEmpty else { return nil }
         // 两侧不能完全相同
         guard original != translated else { return nil }
-        let hasCJK: (String) -> Bool = { s in s.contains { 0x4E00...0x9FFF ~= $0.unicodeScalars.first!.value } }
+        let hasCJK: (String) -> Bool = { s in
+            s.contains { 0x4E00...0x9FFF ~= ($0.unicodeScalars.first?.value ?? 0) }
+        }
         let hasLatin: (String) -> Bool = { s in
             s.rangeOfCharacter(from: CharacterSet.letters.subtracting(CharacterSet(charactersIn: "　-￿"))) != nil
         }

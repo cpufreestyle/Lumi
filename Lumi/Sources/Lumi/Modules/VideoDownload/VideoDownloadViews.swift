@@ -44,7 +44,9 @@ final class VideoDownloadController: ObservableObject {
     private var outputPipe: Pipe?
 
     private init() {
-        let dlDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        // 下载目录理论上必然存在，但仍回退到用户主目录，避免强制解包崩溃
+        let dlDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
         downloadsDir = dlDir.appendingPathComponent("Lumi Downloads")
         try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
         checkYtDlp()
@@ -241,10 +243,10 @@ final class VideoDownloadController: ObservableObject {
                         // 查找实际文件
                         let ext = format == .mp4 ? "mp4" : "mp3"
                         let expectedFile = self?.downloadsDir.appendingPathComponent("\(safeTitle).\(ext)")
-                        if let path = expectedFile?.path, FileManager.default.fileExists(atPath: path) {
-                            self?.downloads[idx].filePath = path
+                        if let file = expectedFile, FileManager.default.fileExists(atPath: file.path) {
+                            self?.downloads[idx].filePath = file.path
                             // 在 Finder 中显示
-                            NSWorkspace.shared.activateFileViewerSelecting([expectedFile!])
+                            NSWorkspace.shared.activateFileViewerSelecting([file])
                         }
                     }
                 } else {

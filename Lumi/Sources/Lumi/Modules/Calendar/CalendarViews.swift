@@ -9,14 +9,25 @@ final class CalendarController: ObservableObject {
     @Published var todayDate: Date = Date()
 
     private let store = EKEventStore()
-    private var timer: Timer?
 
     private init() {
         requestAccess()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            self?.todayDate = Date()
-            self?.fetchEvents()
-        }
+        // 按需轮询：日历面板可见时 60s（跨天、日程增减能及时反映），
+        // 不可见时降到 5 分钟兜底，避免 EventKit 查询常驻空转。
+        PollingCoordinator.shared.register(
+            id: "calendar.events",
+            interval: { [weak self] in self?.pollInterval() ?? 0 },
+            action: { [weak self] in
+                self?.todayDate = Date()
+                self?.fetchEvents()
+            }
+        )
+    }
+
+    /// 当前期望的轮询间隔（秒）。
+    private func pollInterval() -> TimeInterval {
+        let state = AppState.shared
+        return (state.isExpanded && state.activeModule == .calendar) ? 60 : 300
     }
 
     func requestAccess() {
@@ -203,11 +214,8 @@ struct CalendarExpandedView: View {
     func eventRow(_ event: EKEvent) -> some View {
         HStack(spacing: 10) {
             RoundedRectangle(cornerRadius: 2)
-                .fill(
-                    event.calendar?.color != nil
-                        ? Color(event.calendar!.color!)
-                        : Color.pink
-                )
+                // 日历颜色为可选值，缺失时回退到粉色，避免强制解包崩溃
+                .fill(event.calendar?.color.map { Color($0) } ?? Color.pink)
                 .frame(width: 3, height: 30)
 
             VStack(alignment: .leading, spacing: 2) {

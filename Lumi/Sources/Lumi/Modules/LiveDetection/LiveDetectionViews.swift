@@ -9,7 +9,6 @@ final class LiveDetectionController: ObservableObject {
 
     @Published var detections: [DetectionItem] = []
     @Published var showManualSettings: Bool = false
-    private var timer: Timer?
     /// 采集用的后台串行队列（子进程 / AppleScript 均为同步阻塞调用）
     private let workQueue = DispatchQueue(label: "com.lumi.livedetection", qos: .utility)
 
@@ -43,9 +42,20 @@ final class LiveDetectionController: ObservableObject {
         manualActive = UserDefaults.standard.dictionary(forKey: manualActiveKey) as? [String: Bool] ?? [:]
         manualValue  = UserDefaults.standard.dictionary(forKey: manualValueKey)  as? [String: String] ?? [:]
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
+        // 按需轮询：检测面板可见时 2s（保持实时），不可见时降到 30s 兜底。
+        // 单次采集涉及 fork 子进程（pmset/defaults）与 AppleScript、耗时可达数百毫秒，
+        // 原先无论面板是否打开都每 2s 执行，是本项目最重的常驻开销。
+        PollingCoordinator.shared.register(
+            id: "liveDetection.refresh",
+            interval: { [weak self] in self?.pollInterval() ?? 0 },
+            action: { [weak self] in self?.refresh() }
+        )
+    }
+
+    /// 当前期望的轮询间隔（秒）。
+    private func pollInterval() -> TimeInterval {
+        let state = AppState.shared
+        return (state.isExpanded && state.activeModule == .liveDetection) ? 2 : 30
     }
 
     // MARK: - 手动覆盖 API

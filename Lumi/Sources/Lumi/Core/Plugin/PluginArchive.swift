@@ -90,7 +90,8 @@ enum PluginArchive {
     private static func wrapContents(_ contents: URL,
                                      fallbackAppName: String?) throws -> URL {
         let fm = FileManager.default
-        var name = fallbackAppName?.isEmpty == false ? fallbackAppName! : "Plugin.app"
+        // 空串视为无效回退名，统一走默认名，避免强制解包
+        var name = fallbackAppName.flatMap { $0.isEmpty ? nil : $0 } ?? "Plugin.app"
         if !name.hasSuffix(".app") { name += ".app" }
         let wrapper = contents.deletingLastPathComponent().appendingPathComponent(name)
         guard !fm.fileExists(atPath: wrapper.path) else {
