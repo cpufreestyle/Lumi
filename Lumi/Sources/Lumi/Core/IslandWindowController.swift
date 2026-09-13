@@ -11,6 +11,7 @@ final class IslandWindowController: NSObject {
     private var cancellables = Set<AnyCancellable>()
     private var mouseMonitor: Any?
     private var mouseDownMonitor: Any?
+    private var auxClickMonitor: Any?
     private var hideTimer: Timer?
     /// 记录上一次鼠标是否处于热区，用于区分"重新进入"与"停留在热区"
     private var wasInZone: Bool = false
@@ -129,6 +130,16 @@ final class IslandWindowController: NSObject {
         }
         NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
             self?.handleNotchDoubleClick(event: ev)
+            return ev
+        }
+
+        // 右键/中键点击胶囊 → 播放/暂停。左键位已被占满（单击展开、双击重置歌词偏移、
+        // 长按歌词微调），故用空闲的右键/中键承载最常用的一键播控。
+        auxClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseDown, .otherMouseDown]) { [weak self] ev in
+            self?.handleCapsuleAuxClick(event: ev)
+        }
+        NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .otherMouseDown]) { [weak self] ev in
+            self?.handleCapsuleAuxClick(event: ev)
             return ev
         }
 
@@ -420,6 +431,24 @@ final class IslandWindowController: NSObject {
         // 切换固定：未固定→钉住常驻并立即弹出胶囊（视觉反馈），
         // 已固定→取消固定并收起。
         togglePin()
+    }
+
+    /// 右键/中键点击胶囊 → 播放/暂停。
+    ///
+    /// 左键位已被占满（单击展开面板、双击重置歌词偏移、长按进入歌词微调），
+    /// 因此用空闲的右键/中键承载最常用的「一键播控」，不改动任何既有手势语义。
+    private func handleCapsuleAuxClick(event: NSEvent) {
+        guard AppState.shared.islandEnabled else { return }
+        // 仅收缩态（胶囊）生效：展开态已有完整播放控件，
+        // 在此拦截会与输入框、插件面板等内容交互冲突。
+        guard !AppState.shared.isExpanded else { return }
+        guard let panel = window, panel.isVisible else { return }
+        // 落点必须在胶囊窗口内（屏幕坐标），避免在其他应用里右键时被误触发
+        guard panel.frame.contains(NSEvent.mouseLocation) else { return }
+
+        MusicController.shared.togglePlayPause()
+        // 立即拉一次状态，避免等最长 1.5s 的轮询才刷新 UI
+        MusicController.shared.fetchInfo()
     }
 
     /// 取消固定：解除常驻锁定并立即收起胶囊，符合"取消固定即消失"的预期。
