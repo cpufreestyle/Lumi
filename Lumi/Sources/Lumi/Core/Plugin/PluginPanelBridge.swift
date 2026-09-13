@@ -1,5 +1,9 @@
 import Foundation
 import Combine
+import Darwin
+
+/// 文件监听事件转发队列（定义在文件作用域，避免 @MainActor 隔离导致的跨线程访问问题）
+private let pluginWatchQueue = DispatchQueue(label: "com.lumi.pluginpanels.watch", qos: .utility)
 
 /// L3 深度集成桥接层（Phase 2）。
 ///
@@ -88,8 +92,14 @@ final class PluginPanelBridge: ObservableObject {
 
     /// 面板文件轮询专用后台队列:磁盘读取与 JSON 解码不占主线程,消除每秒一次的主线程 I/O。
     private let pollQueue = DispatchQueue(label: "com.lumi.pluginpanels.poll", qos: .utility)
-    /// 当前需要轮询的插件 id 集合（由 PluginDiscovery 扫描带 panel 的插件后设置）
+    /// 当前需要监听的插件 id 集合（由 PluginDiscovery 扫描带 panel 的插件后设置）
     private var watchedIDs: Set<String> = []
+    /// 每个插件 json 的监听源（key = plugin id）
+    private var fileSources: [String: DispatchSourceFileSystemObject] = [:]
+    /// 目录监听源：捕获「插件首次创建 json」与原子写入引发的 rename
+    private var dirSource: DispatchSourceFileSystemObject?
+    /// 文件事件防抖（第三方可能一次写多个文件，或高频连续写）
+    private var debounceItem: DispatchWorkItem?
 
     /// 第三方插件应写入的目录（供文档/示例脚本引用）
     static var panelsDirectoryPath: String { panelsDir.path }
@@ -101,6 +111,7 @@ final class PluginPanelBridge: ObservableObject {
         try? FileManager.default.createDirectory(at: Self.panelsDir,
                                                  withIntermediateDirectories: true)
         refreshAll()
+        startWatching()
         startPollingIfNeeded()
     }
 
@@ -130,29 +141,86 @@ final class PluginPanelBridge: ObservableObject {
     }
 
     private func startPollingIfNeeded() {
-        // 无插件面板可看时彻底停止轮询
         guard !watchedIDs.isEmpty else {
+            stopWatching()
             PollingCoordinator.shared.unregister(id: "pluginPanels.poll")
             return
         }
-        // 按需轮询：插件面板/市场可见时 1s 保证实时，不可见时降到 15s 兜底，
-        // 避免第三方插件从未被查看时仍常驻 1Hz 磁盘读取。
-        // 读取/解码在后台队列进行，主线程仅在数据变化时合并写回。
+        // 主更新路径已改为 DispatchSource 文件监听（插件一写入即刻刷新），
+        // 这里只保留 60s 兜底轮询，防止极端情况下漏事件导致面板长期陈旧。
         PollingCoordinator.shared.register(
             id: "pluginPanels.poll",
-            interval: { Self.pollInterval() },
+            interval: { 60 },
             action: { [weak self] in
                 Task { @MainActor in self?.pollOnce() }
             }
         )
     }
 
-    /// 当前期望的轮询间隔（秒）。仅读非隔离的 AppState，故标记为 nonisolated。
-    nonisolated private static func pollInterval() -> TimeInterval {
-        let state = AppState.shared
-        let visible = state.isExpanded &&
-            (state.selectedPluginPanelID != nil || state.showPluginMarket)
-        return visible ? 1.0 : 15.0
+    // MARK: - 文件监听（DispatchSource）
+
+    /// 挂载目录 + 各插件 json 的监听源。每次都会释放旧 fd 并按当前 inode 重新打开。
+    private func startWatching() {
+        stopWatching()
+        guard !watchedIDs.isEmpty else { return }
+        attachDirectoryWatcher()
+        for id in watchedIDs { attachFileWatcher(for: id) }
+    }
+
+    private func stopWatching() {
+        for (_, source) in fileSources { source.cancel() }
+        fileSources.removeAll()
+        dirSource?.cancel()
+        dirSource = nil
+        debounceItem?.cancel()
+        debounceItem = nil
+    }
+
+    /// 目录监听：捕获插件「首次创建」json，以及原子写入产生的 rename。
+    private func attachDirectoryWatcher() {
+        try? FileManager.default.createDirectory(at: Self.panelsDir, withIntermediateDirectories: true)
+        let fd = open(Self.panelsDir.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: pluginWatchQueue)
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in self?.handleFileSystemEvent() }
+        }
+        source.setCancelHandler { close(fd) }
+        dirSource = source
+        source.resume()
+    }
+
+    /// 单个插件 json 的监听。**必须逐文件监听**：
+    /// 目录级 `.write` 事件只反映条目增删，捕获不到「已有文件的内容改写」。
+    private func attachFileWatcher(for id: String) {
+        let path = Self.panelsDir.appendingPathComponent("\(id).json").path
+        let fd = open(path, O_EVTONLY)
+        // 插件还没写过文件：跳过，等目录监听在文件创建时触发重新挂载
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: pluginWatchQueue)
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in self?.handleFileSystemEvent() }
+        }
+        source.setCancelHandler { close(fd) }
+        fileSources[id] = source
+        source.resume()
+    }
+
+    /// 文件事件到达：防抖 0.3s 后读取一次，并重新挂载监听。
+    /// 重新挂载是必需的——第三方普遍用 `.atomic` 写入（临时文件 rename 覆盖原文件），
+    /// 会让手里的 fd 指向已被替换的旧 inode，此后不再收到任何事件。
+    private func handleFileSystemEvent() {
+        debounceItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                self?.pollOnce()
+                self?.startWatching()
+            }
+        }
+        debounceItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
     }
 
     /// 读一轮面板文件：后台队列解码，主线程仅在数据变化时写回。
