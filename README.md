@@ -1,6 +1,6 @@
 # Lumi
 
-> **当前版本：v1.1.8**（与 GitHub Release 保持一致）
+> **当前版本：v1.1.21**（权威来源为 `Lumi/Resources/Info.plist` 的 `CFBundleShortVersionString`，发版时同步更新本行）
 
 macOS 顶部「动态岛」聚合面板。常驻屏幕顶部状态栏上方，鼠标悬停热区时显示，移开自动隐藏。把音乐歌词、电池状态、视频下载、Claude Code / Codex 集成收进一个轻量胶囊界面。
 
