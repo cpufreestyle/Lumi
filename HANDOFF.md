@@ -103,6 +103,7 @@ Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 A
 - 外部 app 状态优先用 `DistributedNotificationCenter` 事件驱动，而非提高轮询频率。
 - Git 推送走小火箭代理 `127.0.0.1:1082`（SSH `ProxyCommand` 已写入 `~/.ssh/config`）；推送失败先确认小火箭在跑、1082 仍在监听。
 - 构建必须 `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` 并使用 `MacOSX26.5.sdk`（见 AGENTS.md）。
+- **`preview_restart.sh` 在 agent / 非 GUI 会话的 shell 里启动会"静默崩溃"**：脚本末尾用 `nohup` 直接拉起二进制，macOS 把责任进程算成 shell 宿主（实测崩溃报告 `responsibleProc = "Qoder CN"`），TCC 按责任进程判定媒体/Apple Events 权限并 SIGABRT 掉 Lumi。症状：输出 `Build complete` + `LAUNCHED_OK`，但 `pgrep -x Lumi` 无结果，`~/Library/Logs/DiagnosticReports/Lumi-*.ips` 报 `namespace:"TCC"` 要求 `NSAppleMusicUsageDescription` —— **该 key 其实已存在于 `Lumi/Resources/Info.plist:31`，报错文案会误导，不要以为是代码 bug 或 Info.plist 缺字段**。收尾一步改用 `cd Lumi && open .build/Lumi.app`（责任进程变为 App 自身，ppid=1，实测正常常驻）；翻译 key 不丢，脚本已 `launchctl setenv`。需要真授权时用 `./run.sh tcc`（先 ad-hoc 签名取稳定 cdhash，再写用户级 `TCC.db` 并重载 tccd）——`preview_restart.sh` 既不管签名也不管授权。
 
 ---
 
