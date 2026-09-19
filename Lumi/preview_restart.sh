@@ -45,5 +45,21 @@ if [ -f "$ENV_FILE" ]; then
   fi
 fi
 
-nohup "$APP/Contents/MacOS/Lumi" >/dev/null 2>&1 &
-echo "LAUNCHED_OK"
+# 用 LaunchServices 启动，让 App 自身成为 TCC 责任进程。
+# 原先 `nohup 二进制 &` 的做法会把责任进程算成调用方的 shell 宿主：在 agent /
+# 非 GUI 会话下 TCC 按宿主判定媒体与 Apple Events 权限，直接 SIGABRT 杀掉 Lumi，
+# 且报错误导为「缺 NSAppleMusicUsageDescription」（该 key 其实存在于 Info.plist）。
+# 翻译 key 不依赖 shell 继承——上面已 launchctl setenv 写入登陆会话环境。
+open "$APP"
+
+# `open` 返回 0 不代表进程真的活着（TCC / 签名问题会静默杀掉），必须自校验。
+for _ in 1 2 3 4 5 6 7 8; do
+  sleep 1
+  if pgrep -x Lumi >/dev/null 2>&1; then
+    echo "LAUNCHED_OK pid=$(pgrep -x Lumi | tr '\n' ' ')"
+    exit 0
+  fi
+done
+
+echo "LAUNCH_FAILED: Lumi 进程未存活，查看 ~/Library/Logs/DiagnosticReports/Lumi-*.ips"
+exit 1
