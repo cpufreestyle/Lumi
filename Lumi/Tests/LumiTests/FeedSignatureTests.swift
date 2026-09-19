@@ -98,8 +98,13 @@ final class FeedSignatureTests: XCTestCase {
     func testBundledOfflineFeedVerifiesAgainstEmbeddedPublicKey() throws {
         // license-tool sign-feed 与 App 验签走同一套 canonical 化;
         // 此测试锁住两侧字节一致性:重签工具或验签实现任一侧漂移都会立刻失败。
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "plugin-feed", withExtension: "json"),
-                                "内置离线 feed 资源缺失")
+        // Package.swift 对资源用 .copy("Resources") 整目录拷贝,文件实际落在 bundle 的
+        // Resources 子目录下,所以两种布局都要尝试,否则取到 nil。
+        let url = try XCTUnwrap(
+            Bundle.module.url(forResource: "plugin-feed", withExtension: "json")
+                ?? Bundle.module.url(forResource: "plugin-feed", withExtension: "json",
+                                     subdirectory: "Resources"),
+            "内置离线 feed 资源缺失")
         let raw = try Data(contentsOf: url)
         XCTAssertEqual(PluginMarketplace.feedSignatureState(rawData: raw,
                                                             publicKey: PluginMarketplace.officialFeedPublicKey),
