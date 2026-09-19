@@ -94,6 +94,17 @@ struct LyricTuningPanel: View {
                     format: "%.0f pt"
                 ) { state.capsuleSize.height = $0 }
 
+                // 全屏避让
+                Toggle(isOn: Binding(
+                    get: { state.hideInFullscreen },
+                    set: { state.hideInFullscreen = $0 }
+                )) {
+                    Text("全屏应用时自动隐藏胶囊")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                .tint(.pink)
+
                 // 重置
                 HStack {
                     Spacer()

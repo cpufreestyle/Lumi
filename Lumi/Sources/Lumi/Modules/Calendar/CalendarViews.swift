@@ -42,11 +42,14 @@ final class CalendarController: ObservableObject {
         let start = Calendar.current.startOfDay(for: Date())
         let end = Calendar.current.date(byAdding: .day, value: 7, to: start)!
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
-        let events = store.events(matching: predicate)
-            .filter { !$0.isAllDay }
-            .sorted { $0.startDate < $1.startDate }
-        DispatchQueue.main.async {
-            self.upcomingEvents = Array(events.prefix(10))
+        // EventKit 查询是同步且可能较慢的操作：放到后台队列，避免在轮询回调（主线程）里卡 UI。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let events = self.store.events(matching: predicate)
+                .filter { !$0.isAllDay }
+                .sorted { $0.startDate < $1.startDate }
+            let top = Array(events.prefix(10))
+            DispatchQueue.main.async { self.upcomingEvents = top }
         }
     }
 

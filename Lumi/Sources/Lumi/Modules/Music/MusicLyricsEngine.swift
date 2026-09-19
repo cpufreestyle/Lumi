@@ -21,7 +21,6 @@ extension MusicController {
     /// force=false 且当前曲目已取到歌词时跳过，避免无谓的 AppleScript 调用。
     func fetchLyricsSync(title: String, artist: String, force: Bool) {
         if !force, hasLyricsFlag { return }
-        diagLog("fetchLyricsSync title=\(title.prefix(20)) artist=\(artist.prefix(15)) force=\(force) hasLyrics=\(hasLyricsFlag)")
 
         let embedded = getEmbeddedLyrics()
         if !embedded.isEmpty {

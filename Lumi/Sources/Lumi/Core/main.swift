@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 // MARK: - 应用入口
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -41,7 +42,85 @@ final class SharedIslandController {
 final class IslandPanel: NSPanel {
     var wantsKeyboardCapture: Bool = false
     override var canBecomeKey: Bool { wantsKeyboardCapture }
+
+    /// 胶囊上的空闲鼠标手势回调（由 IslandWindowController 注入）。
+    /// 左键位已被占满（单击展开 / 双击重置歌词 / 长按微调），故用右键、中键、滚轮承载播控。
+    /// 注意：这些回调只能由 contentView（CapsuleHostingView）触发一次；不要在本面板重写
+    /// 同名鼠标方法，否则同一次点击会经响应链触发两次，toggle 类动作相互抵消等于没反应。
+    var onAuxClick: (() -> Void)?        // 右键短按 → 播放/暂停
+    var onAuxLongPress: (() -> Void)?    // 右键长按 → 快捷菜单
+    var onMiddleClick: (() -> Void)?     // 中键 → 下一首（仅三键鼠标可用）
+    var onRightShiftClick: (() -> Void)? // Shift+右键 → 下一首（通用键位）
+    var onRightOptionClick: (() -> Void)?// Option+右键 → 上一首（通用键位）
+    var onScroll: ((CGFloat) -> Void)?   // 滚轮 → 音量
 }
+
+/// 胶囊内容承载视图。AppKit 会把内容区的鼠标事件先派发给命中的视图（NSHostingView），
+/// 因此在这一层重写各鼠标方法最可靠（NSWindow 的 rightMouseDown 在内容区反而不会被调用）。
+final class CapsuleHostingView<Content: View>: NSHostingView<Content> {
+    /// 右键长按判定阈值：按住超过该时长即弹快捷菜单，短按则播放/暂停。
+    private let longPressDelay: TimeInterval = 0.45
+    private var rightHoldWork: DispatchWorkItem?
+    private var rightLongPressed = false
+    /// 带修饰键的右键已在按下时处理，抬起时不要再当成短按播控。
+    private var suppressAuxClick = false
+
+    override func rightMouseDown(with event: NSEvent) {
+        let panel = window as? IslandPanel
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // 修饰键变体（触控板/Magic Mouse 也能用，不依赖中键）
+        if flags.contains(.shift) {
+            suppressAuxClick = true
+            panel?.onRightShiftClick?()
+            super.rightMouseDown(with: event)
+            return
+        }
+        if flags.contains(.option) {
+            suppressAuxClick = true
+            panel?.onRightOptionClick?()
+            super.rightMouseDown(with: event)
+            return
+        }
+
+        suppressAuxClick = false
+        rightLongPressed = false
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.rightLongPressed = true
+            (self.window as? IslandPanel)?.onAuxLongPress?()
+        }
+        rightHoldWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + longPressDelay, execute: work)
+        super.rightMouseDown(with: event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        rightHoldWork?.cancel()
+        rightHoldWork = nil
+        // 短按（长按未触发、且非修饰键变体）才视为「播放/暂停」。
+        if !rightLongPressed && !suppressAuxClick {
+            (window as? IslandPanel)?.onAuxClick?()
+        }
+        rightLongPressed = false
+        suppressAuxClick = false
+        super.rightMouseUp(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        // 注：触控板 / Magic Mouse 不会产生中键事件，本方法不会触发；
+        // 切歌请用 ⇧/⌥ + 右键（见 IslandWindowController 的键位说明）。
+        (window as? IslandPanel)?.onMiddleClick?()
+        super.otherMouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        (window as? IslandPanel)?.onScroll?(event.scrollingDeltaY)
+        super.scrollWheel(with: event)
+    }
+}
+
+
 
 // MARK: - main
 let app = NSApplication.shared

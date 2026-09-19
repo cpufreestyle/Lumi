@@ -23,25 +23,29 @@ extension MusicController {
             self.translationCache = dict
         }
     }
-    /// 将当前翻译缓存写盘（在 translationQueue 内调用，保证与内存读写一致）。
-    private func persistTranslationCache() {
-        let url = self.translationCacheURL
-        let snapshot = self.translationCache
-        translationQueue.async {
-            guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: url, options: .atomic)
-        }
-    }
-    /// 写入一条译文到内存缓存并异步持久化到磁盘（统一入口，覆盖所有翻译来源）。
-    private func cacheTranslation(_ src: String, _ tr: String) {
-        translationQueue.async { [weak self] in
+    /// 翻译缓存批量落盘（防抖）。
+    ///
+    /// 整首歌可能连续写入几十行译文；若每行都把整个缓存 JSON 重写一遍（atomic 写 = 全量重写），
+    /// 会产生大量重复磁盘 I/O。这里合并为「停止写入 1s 后写一次」。
+    /// 注意必须在 translationQueue 上调度执行，保证与 translationCache 的读写同队列、无竞争。
+    func scheduleCachePersist() {
+        cachePersistWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            self.translationCache[src] = tr
-            // 落盘（粗粒度写整文件，缓存规模小，写盘成本低）
             let url = self.translationCacheURL
             let snapshot = self.translationCache
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
             try? data.write(to: url, options: .atomic)
+        }
+        cachePersistWork = work
+        translationQueue.asyncAfter(deadline: .now() + 1.0, execute: work)
+    }
+    /// 写入一条译文到内存缓存并防抖持久化到磁盘（统一入口，覆盖所有翻译来源）。
+    private func cacheTranslation(_ src: String, _ tr: String) {
+        translationQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.translationCache[src] = tr
+            self.scheduleCachePersist()
         }
     }
 
@@ -97,7 +101,6 @@ extension MusicController {
                         self.scriptQueue.asyncAfter(deadline: .now() + 0.3) { processBatch(at: index + 1) }
                     } else if attempts < 2 {
                         // 整批失败：重试一次（限流往往是突发并发导致，稍后重试大多成功）
-                        self.diagLog("translateBatch 整批失败，重试（attempt=\(attempts)）")
                         self.scriptQueue.asyncAfter(deadline: .now() + 0.8) { attempt() }
                     } else {
                         // 重试仍失败：逐行兜底翻译（每条计入批次完成信号）
@@ -234,14 +237,12 @@ extension MusicController {
     /// 通道由「当前选中的翻译模型」决定：选中大模型类模型 -> 优先走大模型；
     /// 大模型失败则回退 Google 公开接口。最终失败返回 nil（UI 显示原文），不长时间挂起。
     private func translate(text: String, completion: @escaping (String?) -> Void) {
-        if useLLMTranslate, let key = activeTranslateAPIKey {
-            self.diagLog("translate: 大模型 key=\(String(key.prefix(12)))... model=\(activeTranslateModel)")
+        if useLLMTranslate, activeTranslateAPIKey != nil {
             self.translateViaLLM(text: text) { result in
                 if let result { completion(result) }
                 else { self.translateViaGoogle(text: text, completion: completion) }
             }
         } else {
-            self.diagLog("translate: 走 Google 公开接口（稳定、无 key）")
             translateViaGoogle(text: text) { result in
                 if let result { completion(result) }
                 else if self.useLLMTranslate, self.activeTranslateAPIKey != nil {
@@ -280,7 +281,6 @@ extension MusicController {
 
         URLSession.shared.dataTask(with: req) { data, resp, _ in
             if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                self.diagLog("translateViaLLM: HTTP \(http.statusCode) 失败，回退")
                 completion(nil); return
             }
             guard let data = data,
@@ -293,7 +293,6 @@ extension MusicController {
             let cleaned = tr.trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'‘’“”"))
             guard !cleaned.isEmpty else { completion(nil); return }
-            self.diagLog("translateViaLLM OK: \(text) -> \(cleaned)")
             completion(cleaned)
         }.resume()
     }
@@ -308,7 +307,6 @@ extension MusicController {
             if let result = result, !result.isEmpty {
                 completion(result)
             } else if attempt < maxAttempts {
-                self.diagLog("translate 单句失败，重试（attempt=\(attempt)）：\(text.prefix(20))")
                 self.scriptQueue.asyncAfter(deadline: .now() + 0.6) {
                     self.translateWithRetry(text: text, attempt: attempt + 1, completion: completion)
                 }
@@ -326,7 +324,6 @@ extension MusicController {
             if let result = result, result.count == lines.count {
                 completion(result)
             } else if attempt < maxAttempts {
-                self.diagLog("translateBatch 失败，重试（attempt=\(attempt)），行数=\(lines.count)")
                 self.scriptQueue.asyncAfter(deadline: .now() + 0.6) {
                     self.translateBatchWithRetry(lines: lines, attempt: attempt + 1, completion: completion)
                 }
@@ -430,11 +427,9 @@ extension MusicController {
         var req = URLRequest(url: url)
         req.timeoutInterval = 10
         URLSession.shared.dataTask(with: req) { data, resp, err in
-            if let e = err { self.diagLog("translateViaGoogle 网络错误: \(e.localizedDescription)") }
             guard let data = data,
                   let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
                   let seg0 = arr.first as? [Any], !seg0.isEmpty else {
-                if let http = resp as? HTTPURLResponse { self.diagLog("translateViaGoogle HTTP \(http.statusCode) 失败") }
                 completion(nil)
                 return
             }
@@ -447,21 +442,5 @@ extension MusicController {
             guard !cleaned.isEmpty else { completion(nil); return }
             completion(cleaned)
         }.resume()
-    }
-
-    /// [临时诊断] 写入 ~/Library/Application Support/Lumi/lumi_translate.log 便于离线排查翻译。确认后移除。
-    func diagLog(_ msg: String) {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Lumi")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("lumi_translate.log")
-        let line = "\(Date()) [diag] \(msg)\n"
-        if let fh = try? FileHandle(forWritingTo: url) {
-            fh.seekToEndOfFile()
-            fh.write(line.data(using: .utf8) ?? Data())
-            try? fh.close()
-        } else {
-            try? line.write(to: url, atomically: true, encoding: .utf8)
-        }
     }
 }

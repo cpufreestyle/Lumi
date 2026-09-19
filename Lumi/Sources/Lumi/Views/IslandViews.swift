@@ -120,6 +120,67 @@ struct CollapsedView: View {
             CapsuleWidthHandle()
                 .padding(.trailing, 4)
         }
+        // 音乐播放时：底部一条细进度线，不展开也能一眼看到进度。
+        .overlay(alignment: .bottom) {
+            if state.activeModule == .music, music.playbackState == .playing, music.duration > 0 {
+                capsuleProgressLine
+            }
+        }
+        // 滚轮调音量：短暂浮出音量 HUD 覆盖歌词，1.2s 后自动淡出。
+        .overlay {
+            if let vol = state.volumeHUD {
+                volumeHUDView(vol)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: state.volumeHUD)
+    }
+
+    /// 胶囊底部细进度线（进度取 currentTime/duration；随播放轮询刷新）。
+    private var capsuleProgressLine: some View {
+        GeometryReader { geo in
+            let ratio = max(0, min(1, music.currentTime / max(music.duration, 1)))
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.white.opacity(0.14))
+                Rectangle()
+                    .fill(LinearGradient(colors: [.pink, .purple],
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(width: geo.size.width * ratio)
+            }
+        }
+        .frame(height: 2)
+        .clipShape(Capsule())
+        .padding(.horizontal, 30)
+        .padding(.bottom, 2)
+        .allowsHitTesting(false)
+    }
+
+    /// 音量 HUD：滚动调音量时覆盖在胶囊上（图标 + 音量条 + 百分比）。
+    private func volumeHUDView(_ vol: Int) -> some View {
+        let clamped = max(0, min(100, vol))
+        return HStack(spacing: 10) {
+            Image(systemName: clamped == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+                .frame(width: 18)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.18))
+                    Capsule().fill(Color.pink)
+                        .frame(width: geo.size.width * CGFloat(clamped) / 100)
+                }
+            }
+            .frame(height: 5)
+            Text("\(clamped)%")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundColor(.white)
+                .frame(width: 44, alignment: .trailing)
+        }
+        .padding(.horizontal, 22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.94)))
+        .allowsHitTesting(false)
     }
 
     /// 拖移微调时的偏移基准（长按进入时记录，拖动在此基础上累加）。

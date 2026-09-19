@@ -55,16 +55,9 @@ final class MusicController: ObservableObject {
     /// 正值表示歌词时间轴比实际播放「快」了这么多，需要把匹配基准往后推。
     @Published var lyricsOffset: TimeInterval = 0 {
         didSet {
-            UserDefaults.standard.set(lyricsOffset, forKey: lyricsOffsetKey)
-            // 按曲目记忆校准：用户拖动滑块/点击对齐后，记下当前曲的偏移，
-            // 下次再播放同一首自动套用，避免每次都重新调（解决「时间轴不对」反复出现）。
-            let key = currentTrackKey
-            guard !key.isEmpty else { return }
-            scriptQueue.async { [weak self] in
-                guard let self = self else { return }
-                self.offsetByTrack[key] = self.lyricsOffset
-                UserDefaults.standard.set(self.offsetByTrack, forKey: self.offsetByTrackKey)
-            }
+            // 滑块拖动/点击对齐会连续触发多次，落盘合并为「停止变化 0.5s 后写一次」，
+            // 避免每步都写 UserDefaults + 重写整个按曲目偏移字典。
+            scheduleLyricsOffsetPersist()
         }
     }
     private let lyricsOffsetKey = "music_lyrics_offset"
@@ -150,6 +143,12 @@ final class MusicController: ObservableObject {
     var translationCache: [String: String] = [:]
     /// 翻译缓存专用串行队列：统一保护 translationCache 的读写，避免跨线程字典崩溃。
     let translationQueue = DispatchQueue(label: "com.lumi.music.translation")
+    /// 落盘防抖任务。SwiftUI extension 不能声明存储属性，故统一放在主类：
+    /// - cachePersistWork：翻译缓存 JSON 批量落盘（见 MusicTranslationService.scheduleCachePersist）
+    /// - volumePersistWork / lyricsOffsetPersistWork：滑块拖动过程中合并 UserDefaults 写入
+    var cachePersistWork: DispatchWorkItem?
+    var volumePersistWork: DispatchWorkItem?
+    var lyricsOffsetPersistWork: DispatchWorkItem?
     /// AppleScript 为同步阻塞调用（约 100–300ms），必须在后台串行队列执行，
     /// 否则 1.5 秒轮询会周期性卡住主线程。
     let scriptQueue = DispatchQueue(label: "com.lumi.music.script", qos: .utility)
@@ -492,11 +491,44 @@ final class MusicController: ObservableObject {
     // MARK: 音量
     @Published var volume: Int = -1 {
         didSet {
+            // 滑块拖动 / 滚轮连续调节会高频触发，落盘合并为「停止变化 0.5s 后写一次」。
             guard volume >= 0 else { return }
-            UserDefaults.standard.set(volume, forKey: volumeKey)
+            scheduleVolumePersist()
         }
     }
     private let volumeKey = "music_volume"
+
+    /// 歌词校准偏移的防抖落盘：除写 UserDefaults 外，还把按曲目记忆字典整体重写一遍，
+    /// 拖动滑块时若每步都写会放大 I/O，故统一合并。
+    func scheduleLyricsOffsetPersist() {
+        lyricsOffsetPersistWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            UserDefaults.standard.set(self.lyricsOffset, forKey: self.lyricsOffsetKey)
+            // 按曲目记忆校准：用户拖动滑块/点击对齐后，记下当前曲的偏移，
+            // 下次再播放同一首自动套用，避免每次都重新调（解决「时间轴不对」反复出现）。
+            let key = self.currentTrackKey
+            guard !key.isEmpty else { return }
+            self.scriptQueue.async { [weak self] in
+                guard let self = self else { return }
+                self.offsetByTrack[key] = self.lyricsOffset
+                UserDefaults.standard.set(self.offsetByTrack, forKey: self.offsetByTrackKey)
+            }
+        }
+        lyricsOffsetPersistWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    /// 音量的防抖落盘。
+    func scheduleVolumePersist() {
+        volumePersistWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.volume >= 0 else { return }
+            UserDefaults.standard.set(self.volume, forKey: self.volumeKey)
+        }
+        volumePersistWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
 
     /// 启动时读取持久化的音量（-1 表示尚未初始化，由 UI 在首次拿到真实音量后回填）。
     func loadVolumeIfNeeded() {

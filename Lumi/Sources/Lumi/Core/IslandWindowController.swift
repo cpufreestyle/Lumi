@@ -11,8 +11,24 @@ final class IslandWindowController: NSObject {
     private var cancellables = Set<AnyCancellable>()
     private var mouseMonitor: Any?
     private var mouseDownMonitor: Any?
-    private var auxClickMonitor: Any?
+    /// 局部事件监听 token：必须保存，否则无法在 deinit 移除（NSEvent.addLocalMonitorForEvents 返回的 token 即移除凭据）。
+    private var localMouseMoveMonitor: Any?
+    private var localMouseDownMonitor: Any?
+    /// 屏幕拓扑变化通知的观察者 token，供 deinit 注销。
+    private var screenChangeObserver: NSObjectProtocol?
+    /// 前台应用切换 / 空间切换（进出全屏）观察者 token，供 deinit 注销。
+    private var wsAppObserver: NSObjectProtocol?
+    private var wsSpaceObserver: NSObjectProtocol?
     private var hideTimer: Timer?
+    /// 滚轮调音量的状态：
+    /// - scrollVolume：本次连续滚动累积的「意图音量」，仅存内存，避免每格都写 UserDefaults；
+    ///   为 -1 表示尚未开始，下次以 MusicController 的真实音量为准。
+    /// - lastVolumeApply / volumeApplyWork：AppleScript 下发节流（前导 + 尾随）。
+    private var scrollVolume: Int = -1
+    private var lastVolumeApply: Date = .distantPast
+    private var volumeApplyWork: DispatchWorkItem?
+    /// 停止滚动一段时间后让 scrollVolume 失效，重新对齐真实音量（防止外部改音量后基准漂移）。
+    private var scrollResetWork: DispatchWorkItem?
     /// 记录上一次鼠标是否处于热区，用于区分"重新进入"与"停留在热区"
     private var wasInZone: Bool = false
 
@@ -97,7 +113,7 @@ final class IslandWindowController: NSObject {
         panel.hidesOnDeactivate = false
 
         // 关键：让 SwiftUI 内容填满整个窗口
-        let hosting = NSHostingView(rootView: ContentView())
+        let hosting = CapsuleHostingView(rootView: ContentView())
         hosting.autoresizingMask = [.width, .height]
         // 让 hosting layer 完全透明，圆角形状由 SwiftUI 内容的 RoundedRectangle 承载；
         // 面板级阴影已关闭，故不会再有沿矩形边缘的透明直角光晕。
@@ -106,6 +122,27 @@ final class IslandWindowController: NSObject {
         panel.contentView = hosting
 
         self.window = panel
+
+        // 胶囊空闲鼠标手势（左键位已占满，见 CapsuleHostingView）：
+        //   右键短按 → 播放/暂停；右键长按 → 快捷菜单；中键 → 下一首；滚轮 → 音量。
+        panel.onAuxClick = { [weak self] in
+            self?.handleCapsuleAuxClick()
+        }
+        panel.onAuxLongPress = { [weak self] in
+            self?.showCapsuleMenu()
+        }
+        panel.onMiddleClick = { [weak self] in
+            self?.handleCapsuleNextTrack()
+        }
+        panel.onRightShiftClick = { [weak self] in
+            self?.handleCapsuleNextTrack()
+        }
+        panel.onRightOptionClick = { [weak self] in
+            self?.handleCapsulePrevTrack()
+        }
+        panel.onScroll = { [weak self] deltaY in
+            self?.handleCapsuleScroll(deltaY)
+        }
 
         // 平时完全隐藏，仅鼠标碰触顶部动态岛热区时才弹出
         panel.orderOut(nil)
@@ -118,7 +155,7 @@ final class IslandWindowController: NSObject {
             self?.evaluateHotZone()
         }
         // 局部监控：指针已在本应用窗口内时也持续跟踪
-        NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] ev in
+        localMouseMoveMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] ev in
             self?.evaluateHotZone()
             return ev
         }
@@ -128,28 +165,28 @@ final class IslandWindowController: NSObject {
         mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
             self?.handleNotchDoubleClick(event: ev)
         }
-        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
+        localMouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] ev in
             self?.handleNotchDoubleClick(event: ev)
-            return ev
-        }
-
-        // 右键/中键点击胶囊 → 播放/暂停。左键位已被占满（单击展开、双击重置歌词偏移、
-        // 长按歌词微调），故用空闲的右键/中键承载最常用的一键播控。
-        auxClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseDown, .otherMouseDown]) { [weak self] ev in
-            self?.handleCapsuleAuxClick(event: ev)
-        }
-        NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .otherMouseDown]) { [weak self] ev in
-            self?.handleCapsuleAuxClick(event: ev)
             return ev
         }
 
         // 菜单栏图标：即使没有辅助功能权限，也能看到应用并手动唤出动态岛
         setupStatusItem()
 
+        // 前台应用切换 / 空间切换（进出全屏）时立即重估热区：
+        // 否则进入全屏后要等下一次鼠标移动才会收起胶囊（全屏检测结果有 1s 缓存）。
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        wsAppObserver = wsCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.evaluateHotZone() }
+        wsSpaceObserver = wsCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.evaluateHotZone() }
+
         // 屏幕拓扑变化（开合盖、插拔显示器、分辨率变更）：
         // 目标屏可能已消失或改变，立即按新的 builtInScreen 重新定位，
         // 否则窗口会滞留在旧屏坐标上直到下次鼠标移动。
-        NotificationCenter.default.addObserver(
+        screenChangeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
@@ -248,6 +285,16 @@ final class IslandWindowController: NSObject {
         guard screen.frame.contains(mouse) else {
             wasInZone = false
             if AppState.shared.islandEnabled, !AppState.shared.islandPinned { hideIsland() }
+            return
+        }
+
+        // 全屏应用避让：有 App 正在全屏（视频/游戏/演示）时，不再因 hover 弹出胶囊，
+        // 已显示的也立即收起，避免遮挡全屏内容。
+        // 锁定常驻（islandPinned）视为用户明确要求常驻，优先级更高，不避让。
+        if AppState.shared.hideInFullscreen, !AppState.shared.islandPinned,
+           isFullScreenAppActive(on: screen) {
+            wasInZone = false
+            if window?.isVisible == true { hideIsland() }
             return
         }
 
@@ -433,22 +480,202 @@ final class IslandWindowController: NSObject {
         togglePin()
     }
 
-    /// 右键/中键点击胶囊 → 播放/暂停。
+    /// 右键/中键点击胶囊 → 播放/暂停。由 CapsuleHostingView 捕获后回调触发。
     ///
     /// 左键位已被占满（单击展开面板、双击重置歌词偏移、长按进入歌词微调），
     /// 因此用空闲的右键/中键承载最常用的「一键播控」，不改动任何既有手势语义。
-    private func handleCapsuleAuxClick(event: NSEvent) {
-        guard AppState.shared.islandEnabled else { return }
+    /// 注意：不能用 islandEnabled（总开关）做门禁——关闭总开关后 hover 仍会弹出
+    /// 预览胶囊，此时用户点它却毫无反应。
+    private func handleCapsuleAuxClick() {
         // 仅收缩态（胶囊）生效：展开态已有完整播放控件，
         // 在此拦截会与输入框、插件面板等内容交互冲突。
         guard !AppState.shared.isExpanded else { return }
-        guard let panel = window, panel.isVisible else { return }
-        // 落点必须在胶囊窗口内（屏幕坐标），避免在其他应用里右键时被误触发
-        guard panel.frame.contains(NSEvent.mouseLocation) else { return }
 
         MusicController.shared.togglePlayPause()
         // 立即拉一次状态，避免等最长 1.5s 的轮询才刷新 UI
         MusicController.shared.fetchInfo()
+    }
+
+    /// 中键点击 / Shift+右键 → 下一首。
+    private func handleCapsuleNextTrack() {
+        guard !AppState.shared.isExpanded else { return }
+        MusicController.shared.nextTrack()
+        MusicController.shared.fetchInfo()
+    }
+
+    /// Option+右键 → 上一首。
+    private func handleCapsulePrevTrack() {
+        guard !AppState.shared.isExpanded else { return }
+        MusicController.shared.previousTrack()
+        MusicController.shared.fetchInfo()
+    }
+
+    /// 滚轮滑过胶囊 → 音量增减（每次 ±5）。
+    ///
+    /// 两点优化：
+    /// 1. 累积值只存在内存里的 `scrollVolume`，**不直接写 `MusicController.volume`**——
+    ///    该属性 didSet 会持久化到 UserDefaults，一次滑动手势可达数十格，直接写会疯狂落盘；
+    ///    这里只把「意图值」累积，真正下发时才由 setVolume 统一写一次。
+    /// 2. 对 AppleScript 下发做「前导 + 尾随」节流，避免一次滑动排队几十条脚本。
+    private func handleCapsuleScroll(_ deltaY: CGFloat) {
+        guard !AppState.shared.isExpanded else { return }
+        guard deltaY != 0 else { return }
+
+        let music = MusicController.shared
+        // 基准：连续滚动以内积累积值为准；尚未滚动过则对齐真实音量（-1 未初始化时用 50 兜底）。
+        if scrollVolume < 0 { scrollVolume = music.volume >= 0 ? music.volume : 50 }
+        let next = max(0, min(100, scrollVolume + (deltaY > 0 ? 5 : -5)))
+        guard next != scrollVolume else { return }
+        scrollVolume = next
+        // 胶囊上浮出音量 HUD，给出即时反馈（1.2s 后自动隐藏）。
+        AppState.shared.flashVolumeHUD(next)
+
+        let now = Date()
+        if now.timeIntervalSince(lastVolumeApply) > 0.1 {
+            // 前导：距上次下发已超过 100ms，立即施加，跟手
+            lastVolumeApply = now
+            volumeApplyWork?.cancel()
+            music.setVolume(next)
+        } else {
+            // 尾随：高频滚动时只累积，稍后合并成一次脚本调用
+            volumeApplyWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                self.lastVolumeApply = Date()
+                MusicController.shared.setVolume(self.scrollVolume)
+            }
+            volumeApplyWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+        }
+
+        // 停止滚动 1s 后作废累积值，下次滚动重新以真实音量为准（防基准漂移）。
+        scrollResetWork?.cancel()
+        let reset = DispatchWorkItem { [weak self] in self?.scrollVolume = -1 }
+        scrollResetWork = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: reset)
+    }
+
+    // MARK: - 生命周期
+
+    /// 全屏检测结果缓存：CGWindowList 枚举有开销，mouseMoved 高频触发下用 1s 缓存节流。
+    private var fsCheckAt: Date = .distantPast
+    private var fsCheckResult = false
+
+    /// 判断是否有 App 正在 `screen` 上全屏显示。
+    /// 原理：全屏 App 会创建一个与屏幕等大的 layer-0 窗口，据此做几何判定
+    /// （普通最大化窗口高度不含菜单栏区，不会误判）。
+    /// 注意 CGWindowBounds 用全局坐标（原点左上、y 向下），需与 NSScreen 坐标换算对齐。
+    private func isFullScreenAppActive(on screen: NSScreen) -> Bool {
+        let now = Date()
+        if now.timeIntervalSince(fsCheckAt) < 1.0 { return fsCheckResult }
+        fsCheckAt = now
+
+        var result = false
+        defer { fsCheckResult = result }
+
+        guard let primary = NSScreen.screens.first else { return false }
+        // 屏幕左上角换算到 CG 全局坐标：cgY = 主屏高度 - 屏幕底边（NSScreen 原点在左下）。
+        let cgX = screen.frame.minX
+        let cgY = primary.frame.maxY - screen.frame.maxY
+        let tw = screen.frame.width
+        let th = screen.frame.height
+
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        for info in list {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+            guard let b = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let y = b["Y"], let w = b["Width"], let h = b["Height"] else { continue }
+            // 与屏幕几乎完全重合（容差 2pt）即视为全屏窗口
+            if abs(x - cgX) < 2, abs(y - cgY) < 2, abs(w - tw) < 2, abs(h - th) < 2 {
+                result = true
+                break
+            }
+        }
+        return result
+    }
+
+    /// 注销所有事件监听与通知观察者。
+    /// 本控制器通常随 App 存活至退出，但显式成对释放是正确姿势：
+    /// 将来若改为可重建（如多屏热插拔重建控制器），不做这一步会残留监听导致重复响应。
+    deinit {
+        if let m = mouseMonitor { NSEvent.removeMonitor(m) }
+        if let m = mouseDownMonitor { NSEvent.removeMonitor(m) }
+        if let m = localMouseMoveMonitor { NSEvent.removeMonitor(m) }
+        if let m = localMouseDownMonitor { NSEvent.removeMonitor(m) }
+        if let o = screenChangeObserver { NotificationCenter.default.removeObserver(o) }
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        if let o = wsAppObserver { wsCenter.removeObserver(o) }
+        if let o = wsSpaceObserver { wsCenter.removeObserver(o) }
+        hideTimer?.invalidate()
+        volumeApplyWork?.cancel()
+        scrollResetWork?.cancel()
+    }
+
+    // MARK: - 胶囊右键长按菜单
+
+    /// 右键长按胶囊 → 快捷菜单（播控 + 常驻锁定 + 打开 Apple Music）。
+    private func showCapsuleMenu() {
+        guard !AppState.shared.isExpanded else { return }
+        guard let view = window?.contentView else { return }
+
+        let menu = NSMenu()
+        // 首项做「禁用标题」缓冲：长按后松手时指针正落在首项上，禁用项可避免误触发动作。
+        let title = MusicController.shared.title.isEmpty ? "Lumi 播放控制" : MusicController.shared.title
+        let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(.separator())
+        // 项名带上对应手势，让「右键短按/⇧右键/⌥右键/滚轮」这套键位可被发现。
+        menu.addItem(menuItem(MusicController.shared.playbackState == .playing ? "暂停　（右键）" : "播放　（右键）",
+                              #selector(menuTogglePlay)))
+        menu.addItem(menuItem("上一首　（⌥ + 右键）", #selector(menuPreviousTrack)))
+        menu.addItem(menuItem("下一首　（⇧ + 右键）", #selector(menuNextTrack)))
+        // 音量项仅作「键位说明」，本身不可点（滚轮直接调）。
+        let volumeHint = NSMenuItem(title: "音量 ±5　（滚轮）", action: nil, keyEquivalent: "")
+        volumeHint.isEnabled = false
+        menu.addItem(volumeHint)
+        menu.addItem(.separator())
+        menu.addItem(menuItem(AppState.shared.islandPinned ? "取消常驻" : "锁定常驻",
+                              #selector(menuTogglePin)))
+        menu.addItem(menuItem("打开 Apple Music", #selector(menuOpenMusic)))
+
+        // 在鼠标当前位置弹出（屏幕坐标 → 窗口坐标 → 视图坐标）
+        let windowPoint = window?.convertPoint(fromScreen: NSEvent.mouseLocation) ?? .zero
+        _ = menu.popUp(positioning: nil, at: view.convert(windowPoint, from: nil), in: view)
+    }
+
+    private func menuItem(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func menuTogglePlay() {
+        MusicController.shared.togglePlayPause()
+        MusicController.shared.fetchInfo()
+    }
+
+    @objc private func menuPreviousTrack() {
+        MusicController.shared.previousTrack()
+        MusicController.shared.fetchInfo()
+    }
+
+    @objc private func menuNextTrack() {
+        MusicController.shared.nextTrack()
+        MusicController.shared.fetchInfo()
+    }
+
+    @objc private func menuTogglePin() {
+        togglePin()
+    }
+
+    @objc private func menuOpenMusic() {
+        if let url = URL(string: "music://") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// 取消固定：解除常驻锁定并立即收起胶囊，符合"取消固定即消失"的预期。

@@ -91,6 +91,13 @@ final class AppState: ObservableObject {
     }
     private let islandPinnedKey = "lumi_island_pinned"
 
+    /// 有 App 正在全屏时是否自动隐藏胶囊（避免遮挡全屏视频/游戏/演示）。默认开启。
+    /// 锁定常驻（islandPinned）视为用户明确要求，优先级更高：钉住时全屏也不隐藏。
+    @Published var hideInFullscreen: Bool = true {
+        didSet { UserDefaults.standard.set(hideInFullscreen, forKey: hideInFullscreenKey) }
+    }
+    private let hideInFullscreenKey = "lumi_hide_in_fullscreen"
+
     /// 展开面板是否正在被手动缩放（拖拽右下角手柄中）。
     /// 用于缩放期间冻结歌词区字号/尺寸的重排，避免每帧重建几十行歌词导致卡顿。
     @Published var isResizing: Bool = false
@@ -102,10 +109,9 @@ final class AppState: ObservableObject {
               arr.count == 2 else { return .zero }
         return CGSize(width: arr[0], height: arr[1])
     }() {
-        didSet {
-            UserDefaults.standard.set([lyricOffset.width, lyricOffset.height],
-                                      forKey: AppState.lyricOffsetKey)
-        }
+        // 拖移微调时每帧都会变，落盘统一走防抖（见 scheduleLayoutPersist），
+        // 避免一次拖拽产生上百次 UserDefaults 写入。
+        didSet { scheduleLayoutPersist() }
     }
 
     /// 是否正在拖移调节歌词位置（长按进入），用于显示提示条。
@@ -122,7 +128,7 @@ final class AppState: ObservableObject {
     @Published var lyricLineSpacing: CGFloat = {
         UserDefaults.standard.object(forKey: AppState.lyricSpacingKey).map { $0 as? CGFloat ?? 0 } ?? 0
     }() {
-        didSet { UserDefaults.standard.set(lyricLineSpacing, forKey: Self.lyricSpacingKey) }
+        didSet { scheduleLayoutPersist() }
     }
 
     /// 收缩态胶囊尺寸（宽/高，由用户在设置中调节），持久化。
@@ -131,10 +137,38 @@ final class AppState: ObservableObject {
               arr.count == 2 else { return CGSize(width: 560, height: 110) }
         return CGSize(width: arr[0], height: arr[1])
     }() {
-        didSet {
-            UserDefaults.standard.set([capsuleSize.width, capsuleSize.height],
-                                      forKey: Self.capsuleSizeKey)
+        didSet { scheduleLayoutPersist() }
+    }
+
+    /// 布局类参数（胶囊尺寸 / 歌词偏移 / 行间距）的统一防抖落盘。
+    /// 这些值在拖拽、拖滑过程中每帧都会变化，若在 didSet 里直接写 UserDefaults，
+    /// 一次拖拽会产生上百次磁盘写入。这里合并为「停止变化 0.4s 后写一次」。
+    private var layoutPersistWork: DispatchWorkItem?
+
+    private func scheduleLayoutPersist() {
+        layoutPersistWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            let d = UserDefaults.standard
+            d.set([self.capsuleSize.width, self.capsuleSize.height], forKey: Self.capsuleSizeKey)
+            d.set([self.lyricOffset.width, self.lyricOffset.height], forKey: Self.lyricOffsetKey)
+            d.set(self.lyricLineSpacing, forKey: Self.lyricSpacingKey)
         }
+        layoutPersistWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    /// 滚轮调音量时在收缩胶囊上短暂浮出的音量提示（nil = 不显示）。
+    @Published var volumeHUD: Int? = nil
+    private var volumeHUDWork: DispatchWorkItem?
+
+    /// 显示音量 HUD，并在 1.2s 无操作后自动隐藏。
+    func flashVolumeHUD(_ value: Int) {
+        volumeHUD = value
+        volumeHUDWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.volumeHUD = nil }
+        volumeHUDWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     func resetLyricTuning() {
@@ -180,6 +214,7 @@ final class AppState: ObservableObject {
     private init() {
         islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
         islandPinned = UserDefaults.standard.object(forKey: islandPinnedKey) as? Bool ?? false
+        hideInFullscreen = UserDefaults.standard.object(forKey: hideInFullscreenKey) as? Bool ?? true
         // 启动后静默检查一次更新（后台，不弹窗，除非发现新版本）
         updater.autoCheckOnLaunch()
         // 启动后扫描本地已安装的第三方插件（带 lumi-plugin.json 的 .app）。

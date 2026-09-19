@@ -12,6 +12,8 @@ final class FocusController: ObservableObject {
     @Published var modeLabel: String = "专注"
 
     private var timer: Timer?
+    /// 当前阶段的结束时刻。改用「结束时刻」而非每秒减 1 计算剩余，避免累计漂移。
+    private var deadline: Date?
     private let workDuration: TimeInterval = 25 * 60
     private let shortBreakDuration: TimeInterval = 5 * 60
     private let longBreakDuration: TimeInterval = 15 * 60
@@ -24,24 +26,44 @@ final class FocusController: ObservableObject {
 
     func startStop() {
         if isRunning {
-            timer?.invalidate()
-            isRunning = false
+            stopTimer()
         } else {
             isRunning = true
-            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                if self.remainingTime > 0 {
-                    self.remainingTime -= 1
-                } else {
-                    self.sessionComplete()
-                }
+            // 以「结束时刻」为基准：计时不受定时器实际触发时刻影响，
+            // 也不会因系统睡眠/卡顿而走慢（恢复后直接跳到正确的剩余时间）。
+            deadline = Date().addingTimeInterval(remainingTime)
+            let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+                self?.refreshRemaining()
             }
+            // .common 模式：滚动/拖拽等事件跟踪模式下定时器不会被暂停
+            // （与 PollingCoordinator 的做法一致）。
+            RunLoop.main.add(t, forMode: .common)
+            timer = t
         }
     }
 
-    func reset() {
+    /// 按结束时刻刷新剩余时间；到点则结束当前阶段。
+    private func refreshRemaining() {
+        guard let deadline = deadline else { return }
+        let left = deadline.timeIntervalSinceNow
+        if left <= 0 {
+            remainingTime = 0
+            sessionComplete()
+        } else {
+            remainingTime = left
+        }
+    }
+
+    /// 停止计时并清空结束时刻基准。
+    private func stopTimer() {
         timer?.invalidate()
+        timer = nil
+        deadline = nil
         isRunning = false
+    }
+
+    func reset() {
+        stopTimer()
         if isBreak {
             remainingTime = shortBreakDuration
             totalTime = shortBreakDuration
@@ -52,8 +74,7 @@ final class FocusController: ObservableObject {
     }
 
     private func sessionComplete() {
-        timer?.invalidate()
-        isRunning = false
+        stopTimer()
 
         if isBreak {
             // 休息结束，进入工作
