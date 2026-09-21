@@ -8,13 +8,13 @@
 
 ## 1. 项目一句话概览
 
-Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 Apple Music 播放控制、日历、剪贴板、直播检测、小游戏、插件面板等模块。本轮（09-18~09-19）工作集中在 **胶囊交互层 + 性能** 的打磨，已于 09-19 本地提交（`1ed0ae6`），**尚未发版、未推送远端**。
+Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 Apple Music 播放控制、日历、剪贴板、直播检测、小游戏、插件面板等模块。本轮（09-18~09-19）工作集中在 **胶囊交互层 + 性能** 的打磨，已于 09-19 本地提交（`1ed0ae6`），并于 09-21 连同后续收尾加固一起推送到 `origin/main`（`7a11a71..862a396`），**尚未发版**。
 
 ---
 
 ## 2. 当前代码状态
 
-- 分支：`main`。本轮 10 个 Swift 改动已于 09-19 提交为 `1ed0ae6`（542 插入 / 95 删除）；`HEAD` 领先 `origin/main` 1 个提交，**尚未推送**（推送需用户确认，走 ~/.ssh/config 的小火箭代理）。
+- 分支：`main`。本轮 10 个 Swift 改动已于 09-19 提交为 `1ed0ae6`（542 插入 / 95 删除）；09-21 连同 preview_restart TCC 修复、版本号修正、测试修复一起推送到 `origin/main`（最新 HEAD `862a396`）。推送走 ~/.ssh/config 的小火箭代理。
 - 构建命令（改完 Swift 必做）：`cd "/Users/a1-6/AI Shared/repo/Lumi/Lumi" && bash preview_restart.sh`
 - **双实例坑**：系统里可能同时有 `/Applications/Lumi.app`（旧正式版）和 `Lumi/.build/Lumi.app`（预览版）。调试/发布时务必只留预览版，否则会出现"两个胶囊"假象，误判为 bug。
 - 所有改动已落盘，可编译可运行。
@@ -109,4 +109,4 @@ Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 A
 
 ## 8. 提交与发版状态
 
-本轮 10 个 Swift 改动已本地提交为 `1ed0ae6`，随后是 README / HANDOFF 的文档事实修正。**未推送 `origin/main`、未发版**——推送与发版（下一版 v1.1.22，见 §6）均待用户确认后再执行。若发版时 Release 资产上传受网络影响，可先推送提交，待网络恢复 `gh release upload vX.Y.Z --clobber` 补传。
+本轮 10 个 Swift 改动已本地提交为 `1ed0ae6`，随后是 README / HANDOFF 的文档事实修正、preview_restart TCC 修复、测试修复。**已于 09-21 推送到 `origin/main`（HEAD `862a396`），未发版**——发版（下一版 v1.1.22，见 §6）待用户确认后再执行。若发版时 Release 资产上传受网络影响，可先推送提交，待网络恢复 `gh release upload vX.Y.Z --clobber` 补传。
