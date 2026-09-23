@@ -1,6 +1,6 @@
 # Lumi（macOS 端）交接文档
 
-> 生成时间：2026-09-19 · 交接人：AI 助手
+> 生成时间：2026-09-21 · 交接人：AI 助手
 > 适用对象：下一会话 / 下一位接手者
 > 当前预览版正在运行（`.build/Lumi.app`），最后构建 **0 error / 0 warning**。
 
@@ -8,13 +8,14 @@
 
 ## 1. 项目一句话概览
 
-Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 Apple Music 播放控制、日历、剪贴板、直播检测、小游戏、插件面板等模块。本轮（09-18~09-19）工作集中在 **胶囊交互层 + 性能** 的打磨，已于 09-19 本地提交（`1ed0ae6`），并于 09-21 连同后续收尾加固一起推送到 `origin/main`（`7a11a71..862a396`），**尚未发版**。
+Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 Apple Music 播放控制、日历、剪贴板、直播检测、小游戏、插件面板等模块。09-18~09-19 完成胶囊交互层 + 性能打磨（`1ed0ae6`）；09-21 完成收尾加固（TCC 修复、版本号修正、测试修复）并推送到 `origin/main`（`7a11a71..862a396`）；同日完成依赖安全加固（`c7d2375`，**未推送**）。**尚未发版**。
 
 ---
 
 ## 2. 当前代码状态
 
-- 分支：`main`。本轮 10 个 Swift 改动已于 09-19 提交为 `1ed0ae6`（542 插入 / 95 删除）；09-21 连同 preview_restart TCC 修复、版本号修正、测试修复一起推送到 `origin/main`（最新 HEAD `862a396`）。推送走 ~/.ssh/config 的小火箭代理。
+- 分支：`main`。远端 HEAD `862a396`（09-21 推送）；本地 HEAD `c7d2375`（依赖加固，**未推送**）。推送走 ~/.ssh/config 的小火箭代理。
+- **工作区有未提交的 Swift WIP**：`AppState.swift`、`MusicController.swift`、`IslandControls.swift` 已修改，新文件 `ScreenLockMonitor.swift`——是 ⭐⭐⭐ 锁屏自动暂停功能的进行中实现，**不属于本轮依赖加固**，下一会话接手时需确认是否继续、回退或单独提交。
 - 构建命令（改完 Swift 必做）：`cd "/Users/a1-6/AI Shared/repo/Lumi/Lumi" && bash preview_restart.sh`
 - **双实例坑**：系统里可能同时有 `/Applications/Lumi.app`（旧正式版）和 `Lumi/.build/Lumi.app`（预览版）。调试/发布时务必只留预览版，否则会出现"两个胶囊"假象，误判为 bug。
 - 所有改动已落盘，可编译可运行。
@@ -48,6 +49,17 @@ Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 A
 - 番茄钟计时改为**基于结束时刻**，修掉累计漂移 + 滚动时停摆（RunLoop 改 `.common`）
 - 清理死代码：`persistTranslationCache()`、临时 `diagLog` 日志、全部调试追踪代码
 
+### 3.5 依赖安全加固（09-21，commit `c7d2375`，未推送）
+
+| 改动 | 说明 |
+|---|---|
+| 根 `package.json` | `@playwright/test` 从 dependencies → devDependencies（全仓无引用）；新增 `overrides.qs ^6.16.0` 覆盖 body-parser/express/formidable/superagent |
+| `windows/package.json` | 删掉从未生效的 `esbuild >=0.25.0`（lockfile 仍是 0.21.5，误导性死配置）；新增 `@xmldom/xmldom ^0.8.15` / `js-yaml ^4.3.2` / `fast-uri ^3.1.6` |
+| `docs/依赖安全台账.md` | 记录剩余 4 条告警（vite×3、esbuild×1）为何本轮不修及复评触发条件 |
+| 验证 | `npm test` 41/41 通过；`npm ls` 确认四个 override 全部生效 |
+
+> 本轮共关掉 13/17 条 Dependabot 告警。剩余 4 条均为本地 dev server 可达且需 vite 主版本升级，详见台账。
+
 ---
 
 ## 4. 关键改动文件
@@ -75,7 +87,7 @@ Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 A
 
 | 优先级 | 项 | 说明 |
 |---|---|---|
-| ⭐⭐⭐ | 锁屏/离开工位自动暂停播放 | 目前完全没有，glanceable 联动里最自然 |
+| ⭐⭐⭐ | 锁屏/离开工位自动暂停播放 | **工作区已有 WIP**：`ScreenLockMonitor.swift`（新文件）+ `AppState.swift` / `MusicController.swift` / `IslandControls.swift` 修改，使用 `DistributedNotificationCenter` 事件驱动，未提交。下一会话接手时确认是否继续、回退或单独提交 |
 | ⭐⭐⭐ | 蓝牙/AirPods 电量显示在胶囊 | 项目已 `import IOBluetooth` |
 | ⭐⭐ | 会议/直播检测联动 | `liveDetection` 已有 → 开会自动切模块 + 免打扰 |
 | ⭐⭐ | 设置里自定义键位 | 右键/中键/滚轮各选功能 |
@@ -109,4 +121,7 @@ Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 A
 
 ## 8. 提交与发版状态
 
-本轮 10 个 Swift 改动已本地提交为 `1ed0ae6`，随后是 README / HANDOFF 的文档事实修正、preview_restart TCC 修复、测试修复。**已于 09-21 推送到 `origin/main`（HEAD `862a396`），未发版**——发版（下一版 v1.1.22，见 §6）待用户确认后再执行。若发版时 Release 资产上传受网络影响，可先推送提交，待网络恢复 `gh release upload vX.Y.Z --clobber` 补传。
+- **远端** `origin/main` HEAD `862a396`（09-21 推送，含收尾加固 5 个 commit）。
+- **本地** HEAD `c7d2375`（依赖加固，**未推送**）。
+- **工作区未提交**：锁屏自动暂停 WIP（4 个 Swift 文件），不属于任何已提交轮次。
+- **未发版**——下一版 v1.1.22（见 §6）待用户确认后再执行。若发版时 Release 资产上传受网络影响，可先推送提交，待网络恢复 `gh release upload vX.Y.Z --clobber` 补传。
