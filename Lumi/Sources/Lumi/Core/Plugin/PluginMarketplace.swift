@@ -339,7 +339,7 @@ final class PluginMarketplace: NSObject, ObservableObject {
                     self.installProgress[pluginID] = 1
                     self.refreshInstalled()
                 case .failure(let error):
-                    self.installState[pluginID] = .failed(error.localizedDescription)
+                    self.installState[pluginID] = .failed(NetworkErrorText.describe(error))
                 }
             }
         }
@@ -403,7 +403,7 @@ extension PluginMarketplace: URLSessionDownloadDelegate {
                   let error = error else { return }
             let ns = error as NSError
             if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
-            installState[pid] = .failed(error.localizedDescription)
+            installState[pid] = .failed(NetworkErrorText.describe(error))
         }
     }
 }

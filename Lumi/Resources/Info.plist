@@ -34,6 +34,8 @@
 	<string>Lumi需要检测蓝牙连接状态。</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Lumi需要访问日历以显示您的日程安排。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Lumi需要访问麦克风以进行语音听写转写。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

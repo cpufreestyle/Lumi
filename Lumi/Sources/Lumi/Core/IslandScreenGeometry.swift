@@ -144,8 +144,10 @@ extension IslandWindowController {
         // 游戏模块需要更大面板才能直接玩 H5 小游戏，使用专属默认尺寸 480×600；
         // 其他模块维持默认 360×480。用户手动缩放后一律以 userSize 为准。
         let isGame = AppState.shared.activeModule == .game
+        // 听写面板要给转写结果区留高度，默认比其他模块高 40px
+        let isDictation = AppState.shared.activeModule == .dictation
         let defaultW: CGFloat = isGame ? 480 : 360
-        let defaultH: CGFloat = isGame ? 600 : 480
+        let defaultH: CGFloat = isGame ? 600 : (isDictation ? 520 : 480)
         // 展开态尺寸优先用用户手动调整后的尺寸，否则用模块专属默认值
         // 收缩态尺寸：1:1 贴合物理岛（刘海）本体——
         // 宽取刘海真实宽度（左右安全区之和 = inset.left + inset.right），

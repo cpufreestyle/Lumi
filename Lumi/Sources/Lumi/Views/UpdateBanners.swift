@@ -16,12 +16,12 @@ struct UpdateFeedbackBanner: View {
                     .foregroundColor(feedbackColor)
                 Text(feedback)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(PanelInk.primary)
                 Spacer()
                 Button(action: { updater.manualCheckFeedback = nil }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(PanelInk.text(0.5))
                         .padding(5)
                 }
                 .buttonStyle(.plain)
@@ -31,7 +31,7 @@ struct UpdateFeedbackBanner: View {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(PanelInk.chip(0.06))
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(feedbackColor.opacity(0.3), lineWidth: 0.5))
             )
             .padding(.horizontal, 12)
@@ -69,16 +69,16 @@ struct UpdateAvailableBanner: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(titleText)
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white)
+                            .foregroundColor(PanelInk.primary)
                         Text(subtitleText)
                             .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(PanelInk.text(0.5))
                     }
                     Spacer()
                     Button(action: { updater.dismiss() }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(PanelInk.text(0.5))
                             .padding(6)
                     }
                     .buttonStyle(.plain)
@@ -92,7 +92,7 @@ struct UpdateAvailableBanner: View {
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(PanelInk.chip(0.06))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(accentTint.opacity(0.3), lineWidth: 0.5))
             )
             .padding(.horizontal, 12)
@@ -122,10 +122,10 @@ struct UpdateAvailableBanner: View {
                 Button(action: { updater.ignoreCurrent() }) {
                     Text("忽略")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(PanelInk.text(0.6))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.2)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(PanelInk.chip(0.2)))
                 }
                 .buttonStyle(.plain)
                 .help("不再提示此版本")
@@ -134,15 +134,15 @@ struct UpdateAvailableBanner: View {
             HStack(spacing: 8) {
                 Text("下载中…")
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(PanelInk.text(0.6))
                 Spacer()
                 Button(action: { updater.cancelDownload() }) {
                     Text("取消")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(PanelInk.text(0.6))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.2)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(PanelInk.chip(0.2)))
                 }
                 .buttonStyle(.plain)
                 .help("取消下载")

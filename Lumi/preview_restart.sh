@@ -22,7 +22,23 @@ cp "$BIN_PATH/Lumi" "$APP/Contents/MacOS/Lumi"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp -R "$BIN_PATH/Lumi_Lumi.bundle" "$APP/Contents/Resources/" 2>/dev/null || true
 cp Sources/Lumi/Resources/plugin-feed.json "$APP/Contents/Resources/" 2>/dev/null || true
+# 应用图标：Info.plist 已声明 CFBundleIconFile，不打进去则 Dock/访达显示默认图标。
+if [ -f "Resources/AppIcon.icns" ]; then
+  cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+fi
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+
+# 同步到 /Applications/Lumi.app：桌面快捷方式（tools/make_desktop_shortcut.sh 生成）
+# 指向这个正式安装位。若不在这里同步，预览长期跑源码树 .build 里的旧产物，而桌面
+# 双击拉起的是几个月前的 /Applications 版本，两处行为不一致、难以排查。
+# 失败不阻塞预览（没写权限时静默跳过，只是桌面那份不会更新）。
+INSTALL=/Applications/Lumi.app
+if [[ "$APP" != "$INSTALL" ]]; then
+  if rm -rf "$INSTALL" 2>/dev/null && cp -R "$APP" "$INSTALL" 2>/dev/null; then
+    xattr -dr com.apple.quarantine "$INSTALL" 2>/dev/null || true
+    echo "INSTALLED $INSTALL"
+  fi
+fi
 
 # 从 translate.env 读取翻译 key 注入环境，再直接运行二进制（继承 shell 环境），
 # 避免 `open` 不继承环境导致 key 丢失、翻译回退到已限流的 MyMemory 而卡住。

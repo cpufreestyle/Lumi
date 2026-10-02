@@ -8,11 +8,8 @@ struct PremiumLockOverlay: View {
 
     var body: some View {
         ZStack {
-            // 毛玻璃效果背景
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial)
-                .overlay(Color.black.opacity(0.6))
-
+            // 玻璃底直接挂在内容上：macOS 26+ 用系统玻璃（tint 更暗，让锁图标与文字
+            // 浮在内容之上），旧系统回退原「材质 + 0.6 黑罩层」。
             VStack(spacing: 16) {
                 // 锁图标
                 Image(systemName: "lock.shield.fill")
@@ -24,12 +21,12 @@ struct PremiumLockOverlay: View {
                 VStack(spacing: 6) {
                     Text("此功能需要激活")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(PanelInk.primary)
 
                     if let feature = module.premiumFeature {
                         Text(feature.description)
                             .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.55))
+                            .foregroundColor(PanelInk.text(0.55))
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 30)
                     }
@@ -59,10 +56,10 @@ struct PremiumLockOverlay: View {
                     }) {
                         Text("输入激活码")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(PanelInk.text(0.7))
                             .frame(width: 180)
                             .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.1))
+                            .background(PanelInk.chip(0.1))
                             .cornerRadius(10)
                     }
                     .buttonStyle(.plain)
@@ -76,12 +73,13 @@ struct PremiumLockOverlay: View {
                         Text("试用剩余 \(days) 天")
                             .font(.system(size: 11))
                     }
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(PanelInk.text(0.5))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                    .background(Capsule().fill(PanelInk.chip(0.08)))
                 }
             }
+            .glassPanel(cornerRadius: 16, tint: Color.black.opacity(0.55), scrim: 0.6)
         }
         .cornerRadius(22)
     }
@@ -110,12 +108,12 @@ struct LicensePanelView: View {
             HStack {
                 Text("激活 Lumi")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(PanelInk.text(0.8))
                 Spacer()
                 Button(action: { state.showLicensePanel = false }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(PanelInk.text(0.4))
                 }
                 .buttonStyle(.plain)
             }
@@ -129,14 +127,14 @@ struct LicensePanelView: View {
                 .padding(.horizontal, 16)
 
             Divider()
-                .background(Color.white.opacity(0.1))
+                .background(PanelInk.chip(0.1))
                 .padding(.vertical, 12)
 
             // 功能列表
             VStack(alignment: .leading, spacing: 8) {
                 Text("付费功能")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(PanelInk.text(0.5))
                     .padding(.horizontal, 16)
 
                 ForEach(PremiumFeature.allCases) { feature in
@@ -149,10 +147,10 @@ struct LicensePanelView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(feature.rawValue)
                                 .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.white)
+                                .foregroundColor(PanelInk.primary)
                             Text(feature.description)
                                 .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.4))
+                                .foregroundColor(PanelInk.text(0.4))
                         }
 
                         Spacer()
@@ -160,11 +158,11 @@ struct LicensePanelView: View {
                         if license.isUnlocked(feature) {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 12))
-                                .foregroundColor(.green)
+                                .foregroundColor(PanelInk.green)
                         } else {
                             Image(systemName: "lock.fill")
                                 .font(.system(size: 10))
-                                .foregroundColor(.orange)
+                                .foregroundColor(PanelInk.orange)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -172,7 +170,7 @@ struct LicensePanelView: View {
             }
 
             Divider()
-                .background(Color.white.opacity(0.1))
+                .background(PanelInk.chip(0.1))
                 .padding(.vertical, 12)
 
             // 激活码输入
@@ -181,9 +179,9 @@ struct LicensePanelView: View {
                     TextField("LUMI-XXXX-XXXX-XXXX-XXXX", text: $activationKey)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(.white)
+                        .foregroundColor(PanelInk.primary)
                         .padding(10)
-                        .background(Color.white.opacity(0.08))
+                        .background(PanelInk.chip(0.08))
                         .cornerRadius(8)
                         .focused($isKeyFocused)
                         .onChange(of: activationKey) { _, newVal in
@@ -214,13 +212,17 @@ struct LicensePanelView: View {
                 }) {
                     Text("验证激活码")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white)
+                        // 未填满时底是浅色 chip（浅色外观下白字直接消失），
+                        // 主按钮态才是粉紫渐变（白字），所以跟着底一起换。
+                        .foregroundColor(activationKey.count >= 19
+                                         ? Color.white
+                                         : PanelInk.primary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(
                             activationKey.count >= 19
                                 ? AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing))
-                                : AnyShapeStyle(Color.white.opacity(0.1))
+                                : AnyShapeStyle(PanelInk.chip(0.1))
                         )
                         .cornerRadius(10)
                 }
@@ -247,9 +249,9 @@ struct LicensePanelView: View {
                         TextField("旧版激活码 LUMI-XXXX-XXXX-XXXX-XXXX", text: $oldKeyInput)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundColor(.white)
+                            .foregroundColor(PanelInk.primary)
                             .padding(8)
-                            .background(Color.white.opacity(0.08))
+                            .background(PanelInk.chip(0.08))
                             .cornerRadius(8)
                             .onChange(of: oldKeyInput) { _, v in
                                 let up = v.uppercased(); if up != v { oldKeyInput = up }
@@ -257,16 +259,16 @@ struct LicensePanelView: View {
                         TextField("购买订单号（凭证）", text: $orderInput)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12))
-                            .foregroundColor(.white)
+                            .foregroundColor(PanelInk.primary)
                             .padding(8)
-                            .background(Color.white.opacity(0.08))
+                            .background(PanelInk.chip(0.08))
                             .cornerRadius(8)
                         TextField("后端地址（可选，留空用默认）", text: $endpointOverride)
                             .textFieldStyle(.plain)
                             .font(.system(size: 11))
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(PanelInk.text(0.7))
                             .padding(8)
-                            .background(Color.white.opacity(0.06))
+                            .background(PanelInk.chip(0.06))
                             .cornerRadius(8)
 
                         if let msg = redeemMessage {
@@ -286,13 +288,13 @@ struct LicensePanelView: View {
                                 Text(redeemLoading ? "换发中…" : "换发并激活本机")
                             }
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white)
+                            .foregroundColor(PanelInk.primary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 9)
                             .background(
                                 canRedeem
                                 ? AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.purple], startPoint: .leading, endPoint: .trailing))
-                                : AnyShapeStyle(Color.white.opacity(0.1))
+                                : AnyShapeStyle(PanelInk.chip(0.1))
                             )
                             .cornerRadius(9)
                         }
@@ -301,7 +303,7 @@ struct LicensePanelView: View {
 
                         Text("换发后新码将绑定本机设备，不可转借他人。")
                             .font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.35))
+                            .foregroundColor(PanelInk.text(0.35))
                     }
                     .padding(.horizontal, 16)
                 }
@@ -313,7 +315,7 @@ struct LicensePanelView: View {
                 Button(action: { license.startTrial() }) {
                     Text("开始 7 天免费试用")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.pink)
+                        .foregroundColor(PanelInk.pink)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(Color.pink.opacity(0.1))
@@ -335,7 +337,7 @@ struct LicensePanelView: View {
                     if !snap.failureBreakdown.isEmpty {
                         Text("失败原因分布：")
                             .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.4))
+                            .foregroundColor(PanelInk.text(0.4))
                         ForEach(snap.failureBreakdown.indices, id: \.self) { i in
                             let item = snap.failureBreakdown[i]
                             Text("  • \(item.reason)：\(item.count)")
@@ -343,7 +345,7 @@ struct LicensePanelView: View {
                         }
                     }
                 }
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(PanelInk.text(0.5))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
             }
@@ -425,10 +427,10 @@ struct LicensePanelView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(statusTitle)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(PanelInk.primary)
                 Text(statusSubtitle)
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(PanelInk.text(0.5))
             }
 
             Spacer()
@@ -436,16 +438,16 @@ struct LicensePanelView: View {
             Button(action: { license.refreshRevocations() }) {
                 Text("重新检查")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(PanelInk.text(0.6))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.08))
+                    .background(PanelInk.chip(0.08))
                     .cornerRadius(6)
             }
             .buttonStyle(.plain)
         }
         .padding(12)
-        .background(Color.white.opacity(0.04))
+        .background(PanelInk.chip(0.04))
         .cornerRadius(12)
     }
 

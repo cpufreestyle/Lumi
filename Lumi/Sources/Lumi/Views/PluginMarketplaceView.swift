@@ -71,7 +71,7 @@ struct PluginMarketplaceView: View {
                                     .background(
                                         category == c
                                             ? Color.pink.opacity(0.85)
-                                            : Color.white.opacity(0.08)
+                                            : PanelInk.chip(0.08)
                                     )
                                     .cornerRadius(6)
                             }
@@ -83,9 +83,9 @@ struct PluginMarketplaceView: View {
                 Button(action: { showSources = true }) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(PanelInk.text(0.6))
                         .padding(6)
-                        .background(Circle().fill(Color.white.opacity(0.08)))
+                        .background(Circle().fill(PanelInk.chip(0.08)))
                 }
                 .buttonStyle(.plain)
                 .help("市场源设置")
@@ -93,7 +93,7 @@ struct PluginMarketplaceView: View {
             }
             .padding(.bottom, 6)
 
-            Divider().background(Color.white.opacity(0.1))
+            Divider().background(PanelInk.chip(0.1))
 
             ScrollView {
                 LazyVStack(spacing: 8) {
@@ -123,7 +123,7 @@ struct PluginMarketplaceView: View {
 
     private var installedBody: some View {
         VStack(spacing: 0) {
-            Divider().background(Color.white.opacity(0.1))
+            Divider().background(PanelInk.chip(0.1))
             ScrollView {
                 LazyVStack(spacing: 8) {
                     if market.installed.isEmpty {
@@ -144,13 +144,13 @@ struct PluginMarketplaceView: View {
         VStack(spacing: 6) {
             Image(systemName: "puzzlepiece")
                 .font(.system(size: 26))
-                .foregroundColor(.white.opacity(0.25))
+                .foregroundColor(PanelInk.text(0.25))
             Text(title)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(PanelInk.text(0.7))
             Text(sub)
                 .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(PanelInk.text(0.4))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -173,24 +173,24 @@ struct PluginMarketRow: View {
             HStack(spacing: 10) {
                 Image(systemName: plugin.resolvedIconName)
                     .font(.system(size: 20))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(PanelInk.text(0.85))
                     .frame(width: 34, height: 34)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
+                    .background(Circle().fill(PanelInk.chip(0.08)))
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(plugin.resolvedName)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white)
+                            .foregroundColor(PanelInk.primary)
                         if let v = plugin.version {
                             Text("v\(v)")
                                 .font(.system(size: 9))
-                                .foregroundColor(.white.opacity(0.4))
+                                .foregroundColor(PanelInk.text(0.4))
                         }
                     }
                     if let s = plugin.summary, !s.isEmpty {
                         Text(s)
                             .font(.system(size: 11))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(PanelInk.text(0.5))
                             .lineLimit(1)
                     }
                 }
@@ -198,7 +198,7 @@ struct PluginMarketRow: View {
                 installBadge
             }
             .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
+            .background(RoundedRectangle(cornerRadius: 10).fill(PanelInk.chip(0.05)))
         }
         .buttonStyle(.plain)
     }
@@ -209,22 +209,22 @@ struct PluginMarketRow: View {
             if hasUpdate {
                 Text("更新")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.pink)
+                    .foregroundColor(PanelInk.pink)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().stroke(Color.pink.opacity(0.6)))
             } else {
                 Text("已装")
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(PanelInk.text(0.4))
             }
         } else if plugin.downloadURL != nil {
             Image(systemName: "icloud.and.arrow.down")
                 .font(.system(size: 14))
-                .foregroundColor(.pink)
+                .foregroundColor(PanelInk.pink)
         } else {
             Text("无源")
                 .font(.system(size: 10))
-                .foregroundColor(.white.opacity(0.3))
+                .foregroundColor(PanelInk.text(0.3))
         }
     }
 }
@@ -239,17 +239,17 @@ struct PluginInstalledRow: View {
         HStack(spacing: 10) {
             Image(systemName: plugin.resolvedIconName)
                 .font(.system(size: 20))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(PanelInk.text(0.85))
                 .frame(width: 34, height: 34)
-                .background(Circle().fill(Color.white.opacity(0.08)))
+                .background(Circle().fill(PanelInk.chip(0.08)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(plugin.resolvedName)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(PanelInk.primary)
                 if let v = plugin.version {
                     Text("已安装 v\(v)")
                         .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(PanelInk.text(0.4))
                 }
             }
             Spacer(minLength: 6)
@@ -263,7 +263,7 @@ struct PluginInstalledRow: View {
             .buttonStyle(.plain)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.05)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(PanelInk.chip(0.05)))
     }
 }
 
@@ -290,15 +290,15 @@ struct PluginDetailView: View {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(PanelInk.text(0.7))
                             .padding(8)
-                            .background(Circle().fill(Color.white.opacity(0.1)))
+                            .background(Circle().fill(PanelInk.chip(0.1)))
                     }
                     .buttonStyle(.plain)
                     Spacer()
                     Text("插件详情")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(PanelInk.primary)
                     Spacer()
                     Color.clear.frame(width: 30, height: 30)
                 }
@@ -310,22 +310,22 @@ struct PluginDetailView: View {
                         HStack(spacing: 12) {
                             Image(systemName: plugin.resolvedIconName)
                                 .font(.system(size: 30))
-                                .foregroundColor(.white.opacity(0.9))
+                                .foregroundColor(PanelInk.text(0.9))
                                 .frame(width: 52, height: 52)
-                                .background(Circle().fill(Color.white.opacity(0.08)))
+                                .background(Circle().fill(PanelInk.chip(0.08)))
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(plugin.resolvedName)
                                     .font(.system(size: 16, weight: .bold))
-                                    .foregroundColor(.white)
+                                    .foregroundColor(PanelInk.primary)
                                 if let v = plugin.version {
                                     Text("版本 v\(v)")
                                         .font(.system(size: 11))
-                                        .foregroundColor(.white.opacity(0.45))
+                                        .foregroundColor(PanelInk.text(0.45))
                                 }
                                 if let c = plugin.category {
                                     Text("分类 · \(c)")
                                         .font(.system(size: 11))
-                                        .foregroundColor(.white.opacity(0.45))
+                                        .foregroundColor(PanelInk.text(0.45))
                                 }
                             }
                         }
@@ -333,22 +333,22 @@ struct PluginDetailView: View {
                         if let s = plugin.summary, !s.isEmpty {
                             Text(s)
                                 .font(.system(size: 13))
-                                .foregroundColor(.white.opacity(0.7))
+                                .foregroundColor(PanelInk.text(0.7))
                         }
 
                         if let perms = plugin.permissions, !perms.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("所需权限")
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.white.opacity(0.6))
+                                    .foregroundColor(PanelInk.text(0.6))
                                 ForEach(perms, id: \.type) { p in
                                     HStack(alignment: .top, spacing: 6) {
                                         Image(systemName: "lock.shield")
                                             .font(.system(size: 11))
-                                            .foregroundColor(.orange)
+                                            .foregroundColor(PanelInk.orange)
                                         Text(p.reason)
                                             .font(.system(size: 11))
-                                            .foregroundColor(.white.opacity(0.6))
+                                            .foregroundColor(PanelInk.text(0.6))
                                     }
                                 }
                             }
@@ -365,7 +365,7 @@ struct PluginDetailView: View {
             .frame(width: 320, height: 420)
             .background(RoundedRectangle(cornerRadius: 16)
                 .fill(Color(NSColor.windowBackgroundColor).opacity(0.97)))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(PanelInk.chip(0.12)))
         }
     }
 
@@ -375,14 +375,14 @@ struct PluginDetailView: View {
         case .downloading(let p):
             ProgressView(value: p) {
                 Text("下载中…").font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(PanelInk.text(0.7))
             }
             .progressViewStyle(.linear)
             .frame(maxWidth: .infinity)
         case .installing:
             Text("安装中…")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(PanelInk.text(0.7))
                 .frame(maxWidth: .infinity)
         case .installed, .none:
             if !isInstalled {
@@ -399,7 +399,7 @@ struct PluginDetailView: View {
                 } else {
                     Text("无可用下载地址")
                         .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(PanelInk.text(0.4))
                         .frame(maxWidth: .infinity)
                 }
             } else if hasUpdate {
@@ -457,14 +457,14 @@ struct PluginSourcesView: View {
             HStack {
                 Text("市场源")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(PanelInk.primary)
                 Spacer()
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 13))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(PanelInk.text(0.7))
                         .padding(6)
-                        .background(Circle().fill(Color.white.opacity(0.1)))
+                        .background(Circle().fill(PanelInk.chip(0.1)))
                 }
                 .buttonStyle(.plain)
             }
@@ -472,10 +472,10 @@ struct PluginSourcesView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("官方源（始终启用）")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(PanelInk.text(0.7))
                 Text(market.officialFeedURL?.absoluteString ?? "")
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(PanelInk.text(0.4))
                     .textSelection(.enabled)
             }
 
@@ -489,15 +489,15 @@ struct PluginSourcesView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("自定义社区源")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(PanelInk.text(0.7))
                 HStack {
                     TextField("https://example.com/feed.json", text: $newURL)
                         .textFieldStyle(.plain)
                         .font(.system(size: 11))
-                        .foregroundColor(.white)
+                        .foregroundColor(PanelInk.primary)
                         .padding(6)
                         .background(RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.white.opacity(0.08)))
+                            .fill(PanelInk.chip(0.08)))
                     Button(action: addSource) {
                         Image(systemName: "plus")
                             .foregroundColor(.white)
@@ -512,7 +512,7 @@ struct PluginSourcesView: View {
                     HStack {
                         Text(url.absoluteString)
                             .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(PanelInk.text(0.5))
                             .lineLimit(1)
                         Spacer()
                         Button(action: { market.removeCustomSource(url) }) {
@@ -531,7 +531,7 @@ struct PluginSourcesView: View {
         .frame(width: 340, height: 360)
         .background(RoundedRectangle(cornerRadius: 14)
             .fill(Color(NSColor.windowBackgroundColor).opacity(0.97)))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(PanelInk.chip(0.12)))
     }
 
     private func isValidURL(_ s: String) -> Bool {

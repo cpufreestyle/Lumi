@@ -13,6 +13,10 @@ struct ResizeHandle: View {
             .font(.system(size: 10, weight: .medium))
             .foregroundColor(.white.opacity(dragging ? 0.65 : 0.3))
             .frame(width: 22, height: 22)
+            // 手柄同样浮在内容之上的功能层 chrome：玻璃长在手柄自己身上，
+            // 不是「图标坐在玻璃板上」（skill 点名的最常见错误）。
+            // 修饰顺序 size -> glass -> position，frame 定死胶囊尺寸后再上玻璃。
+            .glassCapsule()
             .contentShape(Rectangle())
             .gesture(
                 DragGesture()
@@ -57,12 +61,12 @@ struct LyricTuningPanel: View {
                 HStack {
                     Text("歌词与胶囊")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(PanelInk.primary)
                     Spacer()
                     Button(action: { state.showLyricTuning = false }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 18))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundColor(PanelInk.text(0.6))
                     }
                     .buttonStyle(.plain)
                 }
@@ -98,10 +102,21 @@ struct LyricTuningPanel: View {
                 Toggle(isOn: Binding(
                     get: { state.hideInFullscreen },
                     set: { state.hideInFullscreen = $0 }
-                )) {
+                )                ) {
                     Text("全屏应用时自动隐藏胶囊")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(PanelInk.text(0.8))
+                }
+                .tint(.pink)
+
+                // 离开工位自动暂停（锁屏 / 屏保 / 睡眠）
+                Toggle(isOn: Binding(
+                    get: { state.pauseOnScreenLock },
+                    set: { state.pauseOnScreenLock = $0 }
+                )) {
+                    Text("锁屏或屏保时自动暂停播放")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(PanelInk.text(0.8))
                 }
                 .tint(.pink)
 
@@ -114,23 +129,21 @@ struct LyricTuningPanel: View {
                             Text("恢复默认")
                         }
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundColor(PanelInk.primary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(Capsule().fill(Color.pink.opacity(0.85)))
                     }
                     .buttonStyle(.plain)
+                    // 玻璃长在按钮自己身上，粉色 tint 标识主操作；与容器面板同组采样
+                    .glassButton(tint: Color.pink.opacity(0.6))
                     Spacer()
                 }
             }
             .padding(20)
             .frame(width: 320)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial)
-                    .overlay(Color.black.opacity(0.9))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-            )
+            // 与展开态岛面板同一套系统玻璃：tint 压暗保证滑块/文字可读。
+            .glassPanel(cornerRadius: 16, tint: Color.black.opacity(0.85),
+                        scrim: 0.9, stroke: 0.12)
             .shadow(color: .black.opacity(0.5), radius: 25, y: 10)
         }
     }
@@ -147,11 +160,11 @@ struct LyricTuningPanel: View {
             HStack {
                 Text(title)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(PanelInk.text(0.8))
                 Spacer()
                 Text(String(format: format, value))
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(PanelInk.text(0.5))
                     .frame(width: 56, alignment: .trailing)
             }
             Slider(value: Binding(
@@ -180,6 +193,8 @@ struct CapsuleResizeHandle: View {
             .font(.system(size: 10, weight: .medium))
             .foregroundColor(.white.opacity(dragging ? 0.75 : 0.35))
             .frame(width: 22, height: 22)
+            // 与右下角展开面板手柄同一套玻璃皮肤：胶囊尺寸定死后上玻璃。
+            .glassCapsule()
             .contentShape(Rectangle())
             .gesture(
                 DragGesture()
@@ -220,6 +235,8 @@ struct CapsuleWidthHandle: View {
             .font(.system(size: 10, weight: .medium))
             .foregroundColor(.white.opacity(dragging ? 0.85 : 0.4))
             .frame(width: 18, height: 30)
+            // 只拉宽手柄：同一套 Liquid Glass 皮肤，尺寸先定、玻璃在后。
+            .glassCapsule()
             .contentShape(Rectangle())
             .gesture(
                 DragGesture()

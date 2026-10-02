@@ -16,7 +16,7 @@ struct PluginPanelView: View {
             HStack(spacing: 10) {
                 Image(systemName: panel.iconName.isEmpty ? "puzzlepiece" : panel.iconName)
                     .font(.system(size: 18))
-                    .foregroundColor(.white)
+                    .foregroundColor(PanelInk.control)
                     .frame(width: 34, height: 34)
                     .background(Circle().fill(
                         LinearGradient(colors: [Color.pink, Color.purple],
@@ -25,7 +25,7 @@ struct PluginPanelView: View {
                     HStack(spacing: 4) {
                         Text(panel.title)
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.white)
+                            .foregroundColor(PanelInk.primary)
                         // 权限提示图标：只在插件分页头部显示，与已安装列表区分
                         if let perms = pluginPermissions, !perms.isEmpty {
                             Image(systemName: "hand.raised.fill")
@@ -37,7 +37,7 @@ struct PluginPanelView: View {
                     if let sub = panel.subtitle, !sub.isEmpty {
                         Text(sub)
                             .font(.system(size: 11))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(PanelInk.text(0.5))
                     }
                 }
                 Spacer()
@@ -50,9 +50,9 @@ struct PluginPanelView: View {
                     }) {
                         Image(systemName: "arrow.up.right.square")
                             .font(.system(size: 14))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(PanelInk.text(0.5))
                             .padding(6)
-                            .background(Circle().fill(Color.white.opacity(0.08)))
+                            .background(Circle().fill(PanelInk.chip(0.08)))
                     }
                     .buttonStyle(.plain)
                     .help("打开 \(panel.title) 主程序")
@@ -61,17 +61,17 @@ struct PluginPanelView: View {
             .padding(.horizontal, 16)
             .padding(.top, 14)
 
-            Divider().background(Color.white.opacity(0.1)).padding(.horizontal, 16)
+            Divider().background(PanelInk.chip(0.1)).padding(.horizontal, 16)
 
             // 结构化内容
             if panel.lines.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "tray")
                         .font(.system(size: 24))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(PanelInk.text(0.3))
                     Text("插件暂无内容")
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(PanelInk.text(0.4))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -88,7 +88,7 @@ struct PluginPanelView: View {
 
             // 仅「示例插件（天气）」页面内显示已安装/市场列表模块，其他位置不出现
             if panel.id == "com.lumi.sample-plugin" {
-                Divider().background(Color.white.opacity(0.1)).padding(.horizontal, 16)
+                Divider().background(PanelInk.chip(0.1)).padding(.horizontal, 16)
                 PluginSection()
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
@@ -111,13 +111,13 @@ struct PluginPanelView: View {
         case .text:
             Text(line.value ?? "")
                 .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(PanelInk.text(0.85))
                 .fixedSize(horizontal: false, vertical: true)
         case .kv:
             HStack {
-                Text(line.key ?? "").font(.system(size: 12)).foregroundColor(.white.opacity(0.5))
+                Text(line.key ?? "").font(.system(size: 12)).foregroundColor(PanelInk.text(0.5))
                 Spacer()
-                Text(line.value ?? "").font(.system(size: 12, weight: .medium)).foregroundColor(.white)
+                .foregroundColor(PanelInk.primary)
             }
         case .progress:
             ProgressView(value: min(1, max(0, line.p ?? 0)))
@@ -132,10 +132,10 @@ struct PluginPanelView: View {
             }) {
                 Text(line.title ?? "")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(PanelInk.primary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.1))
+                    .background(PanelInk.chip(0.1))
                     .cornerRadius(8)
             }
             .buttonStyle(.plain)

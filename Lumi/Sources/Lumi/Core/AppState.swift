@@ -11,6 +11,10 @@ enum AppModule: String, CaseIterable, Identifiable {
     case codex = "Codex"
     case videoDownload = "下载"
     case game = "游戏"
+    case aiAssist = "助手"
+    case cliUsage = "用量"
+    case tv = "电视"
+    case dictation = "听写"
 
     var id: String { rawValue }
 
@@ -24,6 +28,10 @@ enum AppModule: String, CaseIterable, Identifiable {
         case .codex:       return "wand.and.stars"
         case .videoDownload: return "arrow.down.to.line"
         case .game:        return "gamecontroller.fill"
+        case .aiAssist:  return "sparkles"
+        case .cliUsage:  return "chart.bar.fill"
+        case .tv:        return "tv.fill"
+        case .dictation: return "mic.fill"
         }
     }
 
@@ -37,6 +45,10 @@ enum AppModule: String, CaseIterable, Identifiable {
         case .codex:       return "codex"
         case .videoDownload: return "dl"
         case .game:        return "game"
+        case .aiAssist:  return "AI"
+        case .cliUsage:  return "usage"
+        case .tv:        return "tv"
+        case .dictation: return "dict"
         }
     }
 
@@ -71,6 +83,7 @@ final class AppState: ObservableObject {
     static let lyricOffsetKey = "lumi_lyric_offset"
     static let lyricSpacingKey = "lumi_lyric_spacing"
     static let capsuleSizeKey = "lumi_capsule_size"
+    static let tabRowHeightKey = "lumi_tab_row_height"
 
     /// 动态岛是否悬浮显示（鼠标悬停时展开）
     @Published var isHovering: Bool = false
@@ -97,6 +110,13 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(hideInFullscreen, forKey: hideInFullscreenKey) }
     }
     private let hideInFullscreenKey = "lumi_hide_in_fullscreen"
+
+    /// 锁屏 / 屏保 / 睡眠（离开工位）时是否自动暂停正在播放的音乐。默认开启。
+    /// 只暂停、不恢复：解锁后突然出声是负体验，恢复交给用户自己点一次。
+    @Published var pauseOnScreenLock: Bool = true {
+        didSet { UserDefaults.standard.set(pauseOnScreenLock, forKey: pauseOnScreenLockKey) }
+    }
+    private let pauseOnScreenLockKey = "lumi_pause_on_screen_lock"
 
     /// 展开面板是否正在被手动缩放（拖拽右下角手柄中）。
     /// 用于缩放期间冻结歌词区字号/尺寸的重排，避免每帧重建几十行歌词导致卡顿。
@@ -140,7 +160,21 @@ final class AppState: ObservableObject {
         didSet { scheduleLayoutPersist() }
     }
 
-    /// 布局类参数（胶囊尺寸 / 歌词偏移 / 行间距）的统一防抖落盘。
+    /// 展开态标签栏的单行高度（由用户拖拽调节），持久化。
+    ///
+    /// 标签栏固定两行（内置模块一行 + 插件一行），行高可调是为了在
+    /// 「文字被截断」与「占空间过多」之间让用户自己找平衡：
+    /// 调大可完整显示长插件名，调小则让标签区更紧凑。
+    static let tabRowHeightRange: ClosedRange<CGFloat> = 30...76
+    @Published var tabRowHeight: CGFloat = {
+        let saved = UserDefaults.standard.double(forKey: AppState.tabRowHeightKey)
+        return saved > 0 ? min(max(saved, AppState.tabRowHeightRange.lowerBound),
+                               AppState.tabRowHeightRange.upperBound) : 46
+    }() {
+        didSet { scheduleLayoutPersist() }
+    }
+
+    /// 布局类参数（胶囊尺寸 / 歌词偏移 / 行间距 / 标签行高）的统一防抖落盘。
     /// 这些值在拖拽、拖滑过程中每帧都会变化，若在 didSet 里直接写 UserDefaults，
     /// 一次拖拽会产生上百次磁盘写入。这里合并为「停止变化 0.4s 后写一次」。
     private var layoutPersistWork: DispatchWorkItem?
@@ -153,6 +187,7 @@ final class AppState: ObservableObject {
             d.set([self.capsuleSize.width, self.capsuleSize.height], forKey: Self.capsuleSizeKey)
             d.set([self.lyricOffset.width, self.lyricOffset.height], forKey: Self.lyricOffsetKey)
             d.set(self.lyricLineSpacing, forKey: Self.lyricSpacingKey)
+            d.set(Double(self.tabRowHeight), forKey: Self.tabRowHeightKey)
         }
         layoutPersistWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
@@ -215,6 +250,9 @@ final class AppState: ObservableObject {
         islandEnabled = UserDefaults.standard.object(forKey: islandEnabledKey) as? Bool ?? true
         islandPinned = UserDefaults.standard.object(forKey: islandPinnedKey) as? Bool ?? false
         hideInFullscreen = UserDefaults.standard.object(forKey: hideInFullscreenKey) as? Bool ?? true
+        pauseOnScreenLock = UserDefaults.standard.object(forKey: pauseOnScreenLockKey) as? Bool ?? true
+        // 离开工位（锁屏/屏保/睡眠）自动暂停音乐：事件驱动，无需轮询。
+        ScreenLockMonitor.shared.start()
         // 启动后静默检查一次更新（后台，不弹窗，除非发现新版本）
         updater.autoCheckOnLaunch()
         // 启动后扫描本地已安装的第三方插件（带 lumi-plugin.json 的 .app）。

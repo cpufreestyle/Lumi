@@ -83,7 +83,11 @@ final class PollingCoordinator {
         let delay: TimeInterval
         if let minInterval = active.min() {
             // 打拍取最紧急间隔的一半，保证不会错过窗口；夹在 0.25s~1s 之间避免过度唤醒。
-            delay = min(max(minInterval / 2, 0.25), 1.0)
+            // 0.25s 下限不是随意选的：音乐播放进度期望 1.5s 一拍，若打拍上限
+            // 是 1.0s，elapsed 累到 1.5s 时实际触发可能拖到 2.0s —— 每拍真值
+            // 晚 0.5s，补间虽能补足数值，「取样时刻」与「真值读取时刻」的差距
+            // 却被放大，歌词会出现可感知的整体偏移。打拍够细才能让每拍准时。
+            delay = min(max(minInterval / 2, 0.25), 0.5)
         } else {
             // 没有任务需要执行：空闲拍，仅用于检测是否有任务恢复需要。
             delay = 5.0

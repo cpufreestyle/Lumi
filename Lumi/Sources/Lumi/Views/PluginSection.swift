@@ -22,10 +22,10 @@ struct PluginSection: View {
             HStack(spacing: 6) {
                 Image(systemName: "puzzlepiece.extension")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.55))
+                    .foregroundColor(PanelInk.text(0.55))
                 Text("插件")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.55))
+                    .foregroundColor(PanelInk.text(0.55))
                 Spacer()
                 Picker("", selection: $tab) {
                     ForEach(Tab.allCases) { t in
@@ -56,7 +56,7 @@ struct PluginSection: View {
         if list.isEmpty {
             Text("未发现第三方插件。在 App 的 Contents/Resources 放置 lumi-plugin.json 即可接入，或到「市场」一键安装。")
                 .font(.system(size: 10))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(PanelInk.text(0.4))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 14)
                 .padding(.top, 2)
@@ -86,14 +86,14 @@ struct PluginSection: View {
                     .padding(.horizontal, 14)
                 Button("重试") { market.loadFeed() }
                     .font(.system(size: 10))
-                    .foregroundColor(.pink)
+                    .foregroundColor(PanelInk.pink)
                     .padding(.horizontal, 14)
             }
         case .ready:
             if market.available.isEmpty {
                 Text("市场暂无可用插件。")
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(PanelInk.text(0.4))
                     .padding(.horizontal, 14)
             } else {
                 ForEach(market.available) { plugin in
@@ -106,7 +106,7 @@ struct PluginSection: View {
     private func loadingRow(_ text: String) -> some View {
         HStack(spacing: 8) {
             ProgressView().scaleEffect(0.6)
-            Text(text).font(.system(size: 10)).foregroundColor(.white.opacity(0.5))
+            Text(text).font(.system(size: 10)).foregroundColor(PanelInk.text(0.5))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -121,12 +121,12 @@ struct PluginSection: View {
             HStack(spacing: 10) {
                 Image(systemName: plugin.resolvedIconName)
                     .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(PanelInk.text(0.85))
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(plugin.resolvedName)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.92))
+                        .foregroundColor(PanelInk.text(0.92))
                     let sub = [
                         plugin.version.map { "v\($0)" },
                         plugin.panelHint,
@@ -134,20 +134,20 @@ struct PluginSection: View {
                     ].compactMap { $0 }.first
                     if let sub, !sub.isEmpty {
                         Text(sub).font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.45)).lineLimit(1)
+                            .foregroundColor(PanelInk.text(0.45)).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 4)
                 Image(systemName: "arrow.up.right.square")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.35))
+                    .foregroundColor(PanelInk.text(0.35))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(PanelInk.chip(0.04)))
         .padding(.horizontal, 10)
     }
 
@@ -157,15 +157,15 @@ struct PluginSection: View {
         HStack(spacing: 10) {
             Image(systemName: plugin.resolvedIconName)
                 .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(PanelInk.text(0.85))
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(plugin.resolvedName)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.92))
+                    .foregroundColor(PanelInk.text(0.92))
                 if let hint = plugin.panelHint, !hint.isEmpty {
                     Text(hint).font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.45)).lineLimit(1)
+                        .foregroundColor(PanelInk.text(0.45)).lineLimit(1)
                 }
             }
             Spacer(minLength: 4)
@@ -174,7 +174,7 @@ struct PluginSection: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(PanelInk.chip(0.04)))
         .padding(.horizontal, 10)
     }
 
@@ -186,10 +186,10 @@ struct PluginSection: View {
                 market.uninstall(plugin)
             }
             .font(.system(size: 10))
-            .foregroundColor(.white.opacity(0.6))
+            .foregroundColor(PanelInk.text(0.6))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .background(Capsule().fill(PanelInk.chip(0.08)))
         } else {
             switch state {
             case .none:
@@ -204,13 +204,13 @@ struct PluginSection: View {
                     ProgressView(value: p).frame(width: 44)
                     Text("\(Int(p * 100))%")
                         .font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(PanelInk.text(0.6))
                 }
             case .installing:
                 ProgressView().scaleEffect(0.6)
             case .installed:
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
+                    .foregroundColor(PanelInk.green)
                     .font(.system(size: 13))
             case .failed(let msg):
                 Text(msg)

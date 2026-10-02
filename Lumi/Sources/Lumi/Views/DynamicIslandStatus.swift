@@ -68,7 +68,7 @@ struct DynamicIslandStatusView: View {
                         if expanded {
                             Image(systemName: islandOpen ? "chevron.up" : "chevron.down")
                                 .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.white.opacity(0.4))
+                                .foregroundColor(PanelInk.text(0.4))
                         }
                     }
                 }
@@ -91,7 +91,7 @@ struct DynamicIslandStatusView: View {
             view.background(
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Color.black)
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(PanelInk.chip(0.12), lineWidth: 0.5))
             )
         }
     }
@@ -216,7 +216,7 @@ struct DynamicIslandStatusView: View {
             HStack(spacing: 8) {
                 Text("下载中，请稍候…")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(PanelInk.text(0.6))
                 Spacer(minLength: 0)
                 islandButton("取消", primary: false) { updater.cancelDownload() }
             }
@@ -243,7 +243,7 @@ struct DynamicIslandStatusView: View {
                         AnyShapeStyle(primary ?
                             AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.purple],
                                                          startPoint: .leading, endPoint: .trailing))
-                            : AnyShapeStyle(Color.white.opacity(0.1)))
+                            : AnyShapeStyle(PanelInk.chip(0.1)))
                     )
                 )
         }

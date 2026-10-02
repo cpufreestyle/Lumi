@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import ApplicationServices   // AXIsProcessTrusted：探明「辅助功能」权限是否还在
 
 // MARK: - 动态岛窗口控制器
 final class IslandWindowController: NSObject {
@@ -170,6 +171,22 @@ final class IslandWindowController: NSObject {
             return ev
         }
 
+        // 辅助功能权限失效时的热区降级轮询。
+        //
+        // 上面的 addGlobalMonitorForEvents 依赖「辅助功能」权限，而 ad-hoc 签名每次
+        // cdhash 变化都会让该权限静默失效（重新签名后 TCC 里登记的已不是这个二进制）。
+        // 失效时动态岛会「再也不出现」，而菜单栏图标的「显示动态岛」过去也只是把开关
+        // 打开、依旧走 hover，等于救不回来。
+        //
+        // 这里用 AXIsProcessTrusted() 直接探明：未授权时改为轮询 NSEvent.mouseLocation
+        // ——它读的是窗口服务器的当前光标位置，与光标是真实移动还是程序设置无关，
+        // 因此不依赖任何权限。已授权时返回 0，完全不参与调度，事件监听仍是唯一路径。
+        PollingCoordinator.shared.register(
+            id: "island.hotzoneFallback",
+            interval: { [weak self] in self?.hotZoneFallbackInterval() ?? 0 },
+            action: { [weak self] in self?.evaluateHotZone() }
+        )
+
         // 菜单栏图标：即使没有辅助功能权限，也能看到应用并手动唤出动态岛
         setupStatusItem()
 
@@ -205,7 +222,7 @@ final class IslandWindowController: NSObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] expanded in
                 self?.applyState(expanded: expanded)
-                self?.updateGameKeyboardCapture()
+                self?.updateKeyboardCapture()
             }
             .store(in: &cancellables)
 
@@ -223,7 +240,7 @@ final class IslandWindowController: NSObject {
             .sink { [weak self] _ in
                 guard let self = self, AppState.shared.isExpanded else { return }
                 self.updateWindowFrame(expanded: true)
-                self.updateGameKeyboardCapture()
+                self.updateKeyboardCapture()
             }
             .store(in: &cancellables)
 
@@ -273,8 +290,44 @@ final class IslandWindowController: NSObject {
             .store(in: &cancellables)
     }
 
+    /// 未获「辅助功能」权限时才降级为轮询；已授权返回 0（不执行）。
+    /// 0.5s 是「跟手」与「不至于把调度器压成 0.25s 一拍」之间的折中。
+    private func hotZoneFallbackInterval() -> TimeInterval {
+        AXIsProcessTrusted() ? 0 : 0.5
+    }
+
+    /// 用光标坐标同步胶囊（收缩态）的悬停态。
+    ///
+    /// 背景：胶囊右上角的字号控制条由 `AppState.isHovering` 门控显隐，而该状态
+    /// 原先只由 SwiftUI `.onHover` 驱动。面板是非激活窗口（non-activating），
+    /// 合成事件不会触发 `.onHover`，按钮因此永远不显示。这里改用与「热区弹胶囊」
+    /// 同一份依据：光标是否落在胶囊窗口 frame 内。
+    private func syncCapsuleHover() {
+        // 展开态由面板自己的 hover 处理，不受此函数影响。
+        guard !AppState.shared.isExpanded else { return }
+        // 窗口不可见（已收起/正在淡出）时一律视为未悬停。
+        guard let panel = window, panel.isVisible else {
+            setHovering(false)
+            return
+        }
+        setHovering(panel.frame.contains(NSEvent.mouseLocation))
+    }
+
+    /// 只在真正变化时写入，避免 `@Published` 无条件发布引发
+    /// sink → applyState → updateWindowFrame 的自循环。
+    private func setHovering(_ hovering: Bool) {
+        if AppState.shared.isHovering != hovering {
+            AppState.shared.isHovering = hovering
+        }
+    }
+
     /// 判断鼠标是否进入"动态岛"热区（顶部中央横带），据此弹出/收起
     private func evaluateHotZone() {
+        // 先同步悬停态：胶囊右上角的字号控制条（与桌面歌词浮窗同一份控件）
+        // 由 isHovering 驱动显隐，历史依赖 SwiftUI .onHover 在 nonactivating
+        // 面板上并不触发，控制条因此永远不显示。这里改用与「热区弹胶囊」同一份
+        // 依据（光标坐标 ∩ 窗口 frame），让按钮真正能调出来。
+        syncCapsuleHover()
         guard !AppState.shared.isExpanded else { return }
         let mouse = NSEvent.mouseLocation
         // 复用缓存的屏幕与热区（屏幕拓扑变化时才重算），避免高频鼠标事件下重复枚举屏幕。
@@ -454,14 +507,17 @@ final class IslandWindowController: NSObject {
     func toggleIsland() {
         if AppState.shared.islandEnabled {
             AppState.shared.islandEnabled = false
+            AppState.shared.islandPinned = false
             hideIsland()
             statusToggleItem?.title = "显示动态岛"
         } else {
-            // 仅启用 hover 触发（鼠标碰触刘海才弹出），不强制显示、不常驻，
-            // 符合「鼠标没有碰到刘海时胶囊不出现」。
+            // 直接钉住并显形，不再只把开关打开。
+            // 原因：辅助功能权限失效时 hover 收不到事件，只开开关等于「点了没反应」。
+            // 钉住后由用户再点一次「隐藏动态岛」收起，语义与菜单文案一致。
             AppState.shared.islandEnabled = true
+            AppState.shared.islandPinned = true
             wasInZone = false
-            evaluateHotZone()
+            showIsland()
             statusToggleItem?.title = "隐藏动态岛"
         }
     }
@@ -717,29 +773,47 @@ final class IslandWindowController: NSObject {
     // MARK: - 游戏键盘捕获
 
     /// 根据当前状态决定是否让面板接收键盘：
-    /// 仅当「展开态 + 当前模块是游戏」时临时成为 key window，把键盘交给 WKWebView；
-    /// 其余情况恢复 nonactivating 行为（不抢焦点）。
-    private func updateGameKeyboardCapture() {
-        let enabled = AppState.shared.isExpanded && AppState.shared.activeModule == .game
-        setGameKeyboardCapture(enabled)
+    /// 展开态 + 当前模块需要键盘输入（游戏 WKWebView / AI 助手输入框 / 视频下载 URL 框）时
+    /// 放行键盘捕获；其余情况恢复 nonactivating 行为（不抢焦点）。
+    /// 注：SwiftUI TextField/SecureField 所在窗口必须可成为 key，否则点击无反应、
+    /// 打不了字——这正是「输入框无权限填写」的根因。
+    private func updateKeyboardCapture() {
+        let state = AppState.shared
+        guard state.isExpanded else {
+            setKeyboardCapture(false)
+            return
+        }
+        let needsKeyboard: Bool
+        switch state.activeModule {
+        case .game, .aiAssist, .videoDownload:
+            needsKeyboard = true
+        default:
+            needsKeyboard = false
+        }
+        setKeyboardCapture(needsKeyboard)
     }
 
-    /// 开启/关闭游戏键盘捕获。
-    /// - 开启：让面板可成为 key window 并使其成为 key，再把 WKWebView 设为 first responder，
-    ///   这样网页内的 keydown 监听即可收到方向键/字母键等输入。
+    /// 开启/关闭面板键盘捕获。
+    /// - 游戏模块：立即成为 key 并把 WKWebView 设为 first responder，
+    ///   网页内的 keydown 监听才能收到方向键/字母键等输入。
+    /// - 文本输入模块（AI 助手、视频下载）：只放行 key 资格（canBecomeKey），
+    ///   **不强制 makeKey**。nonactivatingPanel 在用户点击输入框时会自然成为 key，
+    ///   这样悬停展开面板也不会抢走别的 App 的焦点。
     /// - 关闭：退出 key window，交还焦点。
-    private func setGameKeyboardCapture(_ enabled: Bool) {
+    private func setKeyboardCapture(_ enabled: Bool) {
         guard let panel = window as? IslandPanel else { return }
         panel.wantsKeyboardCapture = enabled
-        if enabled {
+        guard enabled else {
+            panel.resignKey()
+            return
+        }
+        if AppState.shared.activeModule == .game {
             panel.makeKey()
             // WKWebView 成为 first responder 后才能稳定接收键盘事件；
             // 稍微延迟以确保窗口/视图层级已就绪。
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 GameController.shared.webView?.becomeFirstResponder()
             }
-        } else {
-            panel.resignKey()
         }
     }
 

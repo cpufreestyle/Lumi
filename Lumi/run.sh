@@ -115,6 +115,10 @@ INSERT OR REPLACE INTO access
   add_row "kTCCServiceCalendar" "UNUSED" ""
   add_row "kTCCServiceBluetoothAlways" "UNUSED" ""
   add_row "kTCCServiceBluetooth" "UNUSED" ""
+  # Apple Music 媒体资源库：MusicKit 取歌词（含官方时间轴）走这一项。
+  # 缺它时系统会弹「允许“Lumi”访问 Apple Music 中的音乐、视频活动和媒体资料库吗？」，
+  # 且合成点击对该系统弹窗无效，用户不手动点就永远拿不到歌词（表现为「纯音乐·无歌词」）。
+  add_row "kTCCServiceMediaLibrary" "UNUSED" ""
   # 辅助功能：全局鼠标监控（NSEvent.addGlobalMonitorForEvents）必须有权限才能收到事件，
   # 否则动态岛热区永远无法触发，胶囊窗口始终隐藏。
   add_row "kTCCServiceAccessibility" "UNUSED" ""
@@ -168,10 +172,23 @@ INSERT OR REPLACE INTO access
   sleep 1
 
   echo "== 7. 验证（用户级） =="
-  sqlite3 "$USR_DB" "SELECT service, allowed FROM access WHERE client='$BID';" 2>&1 | sed 's/^/    /'
+  sqlite3 "$USR_DB" "SELECT service, auth_value FROM access WHERE client='$BID';" 2>&1 | sed 's/^/    /'
   echo "DONE: 用户级权限已尝试自动授权（辅助功能无需授权）。"
   if [ -f "$BACKUP" ]; then
     echo "  📦 备份位于: $BACKUP"
+  fi
+
+  # 把刚签好名的 $APP 同步到 /Applications：csreq 是按本机 cdhash 逐位钉死的，
+  # 而桌面快捷方式 / 双击打开走的是 /Applications/Lumi.app。不同步的话写进去的授权
+  # 只对 .build 那份生效，正式安装位一直失配 → 每次都要重新弹系统授权框。
+  INSTALL=/Applications/Lumi.app
+  if [[ "$APP" != "$INSTALL" ]]; then
+    if rm -rf "$INSTALL" 2>/dev/null && cp -R "$APP" "$INSTALL" 2>/dev/null; then
+      xattr -dr com.apple.quarantine "$INSTALL" 2>/dev/null || true
+      echo "  📦 已同步到 $INSTALL (cdhash 与授权记录一致)"
+    else
+      echo "  ⚠️  无法同步到 $INSTALL，正式安装位可能仍会弹授权框"
+    fi
   fi
 }
 
@@ -180,6 +197,11 @@ launch() {
   package
   tcc
   osascript -e 'tell application id "com.lumi.app" to quit' 2>/dev/null || true
+  sleep 1
+  # AppleEvents quit 在多实例时可能只叫停其中一个（甚至一个都没叫停），残留实例
+  # 占着同一 bundle id 会让 open 变成「激活旧实例」而非启动新构建——表现为改了代码
+  # 重启后行为没变。这里按 pid 兜底清场，保证 open 拉起的是刚打包的新二进制。
+  for pid in $(pgrep -f "Contents/MacOS/Lumi"); do kill "$pid" 2>/dev/null || true; done
   sleep 1
   echo "🚀 正在启动 Lumi..."
   open "$APP"
@@ -197,6 +219,7 @@ case "${1:-}" in
     # 否则被脚本开头的 set -e 中断，导致 open / echo 不执行（restart 偶发 exit 1）。
     osascript -e 'tell application id "com.lumi.app" to quit' 2>/dev/null || \
       for pid in $(pgrep -f "Contents/MacOS/Lumi"); do kill "$pid" 2>/dev/null; done || true
+    for pid in $(pgrep -f "Contents/MacOS/Lumi"); do kill "$pid" 2>/dev/null || true; done
     build
     package
     osascript -e 'tell application id "com.lumi.app" to activate' 2>/dev/null || true
