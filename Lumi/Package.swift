@@ -32,8 +32,12 @@ let package = Package(
                 .linkedFramework("CryptoKit")
             ]
         ),
-        // 单元测试目标：仅依赖 Foundation/CryptoKit，不引入 AppKit/SwiftUI/GUI 框架，
-        // 以保证 `swift test` 在 CI/命令行下无需登录会话即可编译运行。
+        // 单元测试目标：依赖完整 Lumi target（含 AppKit/SwiftUI），因为需要覆盖
+        // 从 UI 层抽出的纯逻辑类型（如 TabBarLayout 两行布局计算）。
+        // 代价：`swift test` 需与 App 相同的完整 Xcode 工具链 + macOS 26.5 SDK，
+        // 不再满足「CI/命令行下仅 Foundation/CryptoKit」的原始约束；
+        // 测试本身仍可在无 GUI 会话下通过（实测 532 passed / 0 failed）。
+        // 若将来需要纯 CI 测试，应把这些纯逻辑类型抽到独立的 non-GUI target。
         .testTarget(
             name: "LumiTests",
             dependencies: [
