@@ -161,6 +161,8 @@ final class DesktopLyricsWindowController: ObservableObject {
         // 悬停进出驱动控制条显隐；滚轮上下循环切换字号档位。
         hosting.onHoverChange = { [weak self] hovering in self?.handleHover(hovering) }
         hosting.onSizeScroll = { [weak self] delta in self?.cycleSize(delta: delta) }
+        // 右键短按 → 播放/暂停（与胶囊 onAuxClick 同一套逻辑）。
+        hosting.onRightClick = { [weak self] in self?.handleRightClick() }
         // 关键：contentView 不能直接用 hosting —— NSHostingView 的 hitTest 会把子视图
         // 的命中吃掉，挂在它上面的 AppKit 控件永远收不到点击。改用普通 NSView 容器做
         // contentView，hosting 与控制条当兄弟子视图，命中测试才能正常分发。
@@ -280,6 +282,17 @@ final class DesktopLyricsWindowController: ObservableObject {
         let preset = delta > 0 ? sizePreset.next : sizePreset.previous
         guard preset != sizePreset else { return }
         music.desktopLyricsSizePreset = preset
+    }
+
+    /// 右键短按 → 播放/暂停。
+    ///
+    /// 逻辑抄胶囊 IslandWindowController.handleCapsuleAuxClick：切状态后立刻拉一次，
+    /// 不等最长 1.5s 的轮询才刷新 UI。
+    /// 不设 expanded 守卫：桌面歌词是独立浮窗，没有展开态；锁定时 panel 已 
+    /// ignoresMouseEvents，事件根本到不了这里。
+    private func handleRightClick() {
+        MusicController.shared.togglePlayPause()
+        MusicController.shared.fetchInfo()
     }
 
     private func setControlsVisible(_ visible: Bool) {
@@ -422,8 +435,12 @@ private final class DesktopLyricsHostingView<Content: View>: NSHostingView<Conte
     var onHoverChange: ((Bool) -> Void)?
     /// 滚轮纵向滚动：上下循环切换字号档位。
     var onSizeScroll: ((CGFloat) -> Void)?
+    /// 右键短按（无修饰键）→ 播放/暂停。逻辑抄胶囊 IslandPanel.onAuxClick。
+    var onRightClick: (() -> Void)?
     /// 是否正在拖拽：仅供 open/closed hand 光标切换使用。
     private var dragging = false
+    /// 右键按下时带了修饰键：抬起时不触发播控（与胶囊 suppressAuxClick 同义）。
+    private var suppressRightClick = false
     /// 兜底手动拖拽是否已接管：performDrag 未吃下本次拖动时置 true。
     private var manualDragActive = false
     /// 兜底手动拖拽的锚点（按下瞬间的光标位置与窗口原点）。
@@ -479,6 +496,25 @@ private final class DesktopLyricsHostingView<Content: View>: NSHostingView<Conte
         guard dragging else { return }
         dragging = false
         onDragEnd?(window?.frame.origin ?? .zero)
+    }
+
+    /// 右键 → 播放/暂停。结构与胶囊 CapsuleHostingView 逐行对齐：按下只记录，
+    /// 抬起且未被修饰键变体占用时才动作。
+    ///
+    /// 为什么是右键：左键已被整窗拖拽占用（见 mouseDown 的 performDrag），
+    /// 中键留给切歌、滚轮留给字号（与胶囊同一套键位观）。
+    override func rightMouseDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // 修饰键组合不触发播控：桌面歌词只做「裸右键=播放/暂停」，
+        // 与胶囊 onAuxClick 对齐；shift/option 等变体留给以后扩展。
+        suppressRightClick = !flags.intersection([.shift, .option, .command, .control]).isEmpty
+        super.rightMouseDown(with: event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        if !suppressRightClick { onRightClick?() }
+        suppressRightClick = false
+        super.rightMouseUp(with: event)
     }
 
     override func resetCursorRects() {
