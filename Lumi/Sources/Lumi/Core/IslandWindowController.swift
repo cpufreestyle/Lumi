@@ -189,6 +189,20 @@ final class IslandWindowController: NSObject {
 
         // 菜单栏图标：即使没有辅助功能权限，也能看到应用并手动唤出动态岛
         setupStatusItem()
+        // 订阅全局快捷键触发反馈：把图标短暂换成 play/pause 符号，0.8s 后还原。
+        // 没有这个反馈的话，用户按了快捷键无法确定是否生效（尤其播放态无声音变化时）。
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleGlobalPlayPauseFeedback(_:)),
+            name: .globalPlayPauseTriggered,
+            object: nil
+        )
+        // 按持久化开关注册全局播放快捷键（⌘⌥P）。默认关闭，
+        // 只在用户从菜单栏主动开启后才注册监听，平时不抢占任何键位。
+        if GlobalPlayPauseShortcut.shared.isEnabled {
+            GlobalPlayPauseShortcut.shared.register()
+            statusGlobalShortcutItem?.title = "关闭全局快捷键 ⌘⌥P"
+        }
 
         // 前台应用切换 / 空间切换（进出全屏）时立即重估热区：
         // 否则进入全屏后要等下一次鼠标移动才会收起胶囊（全屏检测结果有 1s 缓存）。
@@ -230,6 +244,15 @@ final class IslandWindowController: NSObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.applyState(expanded: AppState.shared.isExpanded)
+            }
+            .store(in: &cancellables)
+
+        // 播放态驱动菜单栏「播放/暂停」标题：菜单栏是用户最快确认 Music 是否在播的地方，
+        // 不展开面板、不看胶囊也能看出来。全局快捷键触发后同样会走到这里。
+        MusicController.shared.$playbackState
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.syncPlayPauseMenuTitle()
             }
             .store(in: &cancellables)
 
@@ -485,6 +508,30 @@ final class IslandWindowController: NSObject {
         toggle.target = self
         menu.addItem(toggle)
         menu.addItem(.separator())
+        // 播放/暂停（方案 C）：菜单栏直接播控，是「可发现性」的主要落点。
+        // 标题随播放态变化：用户不必展开面板，在菜单栏就能看出 Music 当前是
+        // 正在播 / 已暂停 / 没在放。文案由 syncPlayPauseMenuTitle() 统一算，
+        // 这里只给初始种子值。
+        let playPause = NSMenuItem(title: Self.playPauseMenuTitle(for: MusicController.shared.playbackState),
+                                   action: #selector(statusTogglePlay),
+                                   keyEquivalent: "")
+        playPause.target = self
+        menu.addItem(playPause)
+        self.statusPlayPauseItem = playPause
+        let globalShortcut = NSMenuItem(title: "开启全局快捷键 ⌘⌥P",
+                                        action: #selector(statusToggleGlobalShortcut),
+                                        keyEquivalent: "")
+        globalShortcut.target = self
+        menu.addItem(globalShortcut)
+        self.statusGlobalShortcutItem = globalShortcut
+        // 「快捷键与手势说明」放在显隐开关旁边：用户找不到手势是明确的反馈，
+        // 这个入口必须常驻可见，不能藏在二级菜单里。符号取系统 command 提示键位。
+        let shortcuts = NSMenuItem(title: "快捷键与手势说明",
+                                   action: #selector(statusShowShortcuts),
+                                   keyEquivalent: "")
+        shortcuts.target = self
+        menu.addItem(shortcuts)
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 Lumi", action: #selector(statusQuit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -495,8 +542,86 @@ final class IslandWindowController: NSObject {
 
     private var statusToggleItem: NSMenuItem?
 
+    private var statusPlayPauseItem: NSMenuItem?
+    private var statusGlobalShortcutItem: NSMenuItem?
+    /// 快捷键反馈图标的还原定时器。连按时只保留最后一个，避免提前擦掉新反馈。
+    private var feedbackRestoreTimer: Timer?
+
+    /// 菜单栏「播放 / 暂停」：不依赖辅助功能权限的常驻入口，两点即达。
+    /// 标题随播放态变化（早期写死中性文案「播放 / 暂停」，用户看不出当前状态）。
+
+    /// 把播放态翻成菜单项标题。
+    ///
+    /// 播放中显示「暂停」（点它去暂停）；暂停 / 停止都显示「播放」（点它去起播）
+    /// —— 停止与暂停对菜单栏用户没有区别，不细分；且 Music 没在放时也必须
+    /// 能一键起播，所以停止态给「播放」而不是置灰。
+    static func playPauseMenuTitle(for state: MusicController.PlaybackState) -> String {
+        switch state {
+        case .playing: return "暂停"
+        case .paused:  return "播放"
+        case .stopped: return "播放"
+        }
+    }
+
+    /// 菜单项标题跟随播放态。statusPlayPauseItem 在菜单还没建出来时是 nil，
+    /// 此时 sink 只是空转；setupStatusItem() 建项时已带正确种子值。
+    private func syncPlayPauseMenuTitle() {
+        guard let item = statusPlayPauseItem else { return }
+        let title = Self.playPauseMenuTitle(for: MusicController.shared.playbackState)
+        if item.title != title { item.title = title }
+    }
+    @objc private func statusTogglePlay() {
+        MusicController.shared.togglePlayPause()
+        MusicController.shared.fetchInfo()
+    }
+
+    /// 菜单栏开关：全局快捷键（⌘⌥P）。默认关闭 —— 新增功能不擅自抢占用户键位。
+    /// 开关打开时才注册监听，关闭即注销，不留后台常驻。,
+
+    /// 全局快捷键触发后的菜单栏反馈：图标短暂换成 play / pause 符号，0.8s 后还原。
+    ///
+    /// 两点细节：
+    /// - 连按两次只认最后一次：每次都先 invalidate 上一个还原定时器，
+    ///   否则第一次的定时器会把第二次的反馈图标提前擦掉。
+    /// - 还原的是月亮图标而非清空：状态栏按钮平时就是 moon.stars.fill，
+    ///   只换 image 不动 title，避免图与字重叠（title 一直是空的）。
+    @objc private func handleGlobalPlayPauseFeedback(_ notification: Notification) {
+        let isPlaying = (notification.object as? Bool) ?? false
+        let symbolName = isPlaying ? "play.fill" : "pause.fill"
+        guard let symbol = NSImage(systemSymbolName: symbolName,
+                                   accessibilityDescription: "Lumi") else { return }
+        symbol.isTemplate = true
+        symbol.size = NSSize(width: 16, height: 16)
+        statusItem?.button?.image = symbol
+
+        feedbackRestoreTimer?.invalidate()
+        feedbackRestoreTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            if let moon = NSImage(systemSymbolName: "moon.stars.fill",
+                                  accessibilityDescription: "Lumi") {
+                moon.isTemplate = true
+                moon.size = NSSize(width: 16, height: 16)
+                self.statusItem?.button?.image = moon
+            }
+        }
+    }
+    @objc private func statusToggleGlobalShortcut() {
+        let on = !GlobalPlayPauseShortcut.shared.isEnabled
+        GlobalPlayPauseShortcut.shared.setEnabled(on)
+        statusGlobalShortcutItem?.title = on
+            ? "关闭全局快捷键 ⌘⌥P"
+            : "开启全局快捷键 ⌘⌥P"
+    }
+
     @objc private func statusToggle() {
         toggleIsland()
+    }
+
+    /// 菜单栏「快捷键与手势说明」：把手势清单做成可见入口。
+    /// 此前这些信息只存在于代码注释与胶囊右键菜单里，用户反馈「找不到」；
+    /// 菜单栏图标是唯一不依赖辅助功能权限的常驻入口，说明挂在这里最容易被发现。
+    @objc private func statusShowShortcuts() {
+        KeyboardShortcutsHelpController.shared.show()
     }
 
     @objc private func statusQuit() {
@@ -657,6 +782,7 @@ final class IslandWindowController: NSObject {
     /// 本控制器通常随 App 存活至退出，但显式成对释放是正确姿势：
     /// 将来若改为可重建（如多屏热插拔重建控制器），不做这一步会残留监听导致重复响应。
     deinit {
+        feedbackRestoreTimer?.invalidate()
         if let m = mouseMonitor { NSEvent.removeMonitor(m) }
         if let m = mouseDownMonitor { NSEvent.removeMonitor(m) }
         if let m = localMouseMoveMonitor { NSEvent.removeMonitor(m) }
@@ -684,15 +810,22 @@ final class IslandWindowController: NSObject {
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
-        // 项名带上对应手势，让「右键短按/⇧右键/⌥右键/滚轮」这套键位可被发现。
-        menu.addItem(menuItem(MusicController.shared.playbackState == .playing ? "暂停　（右键）" : "播放　（右键）",
-                              #selector(menuTogglePlay)))
-        menu.addItem(menuItem("上一首　（⌥ + 右键）", #selector(menuPreviousTrack)))
-        menu.addItem(menuItem("下一首　（⇧ + 右键）", #selector(menuNextTrack)))
+        // 项名文案统一从 KeyboardShortcutCatalog 取：菜单里的手势描述与菜单栏
+        // 「快捷键与手势说明」面板同源，不会出现两处说法不一。播放/暂停的当前态
+        // 取决于播放状态，其余项与目录逐字一致。
+        menu.addItem(menuItem(capsulePlayPauseMenuTitle(), #selector(menuTogglePlay)))
+        menu.addItem(menuItem(KeyboardShortcutCatalog.menuTitle(action: "上一首"),
+                              #selector(menuPreviousTrack)))
+        menu.addItem(menuItem(KeyboardShortcutCatalog.menuTitle(action: "下一首"),
+                              #selector(menuNextTrack)))
         // 音量项仅作「键位说明」，本身不可点（滚轮直接调）。
-        let volumeHint = NSMenuItem(title: "音量 ±5　（滚轮）", action: nil, keyEquivalent: "")
+        let volumeHint = NSMenuItem(title: KeyboardShortcutCatalog.menuTitle(action: "音量 +5 / -5"),
+                                    action: nil, keyEquivalent: "")
         volumeHint.isEnabled = false
         menu.addItem(volumeHint)
+        // 完整清单入口：把「本菜单只列了播控相关」补成「看全部手势」的跳转点。
+        menu.addItem(.separator())
+        menu.addItem(menuItem("查看全部键位与手势", #selector(menuShowShortcuts)))
         menu.addItem(.separator())
         menu.addItem(menuItem(AppState.shared.islandPinned ? "取消常驻" : "锁定常驻",
                               #selector(menuTogglePin)))
@@ -707,6 +840,18 @@ final class IslandWindowController: NSObject {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         return item
+    }
+
+    /// 播放/暂停项文案：随播放态切换，键位描述与目录一致（取胶囊首组「右键」）。
+    /// 胶囊右键菜单的播放/暂停文案：随播放态切换，键位描述与目录一致。
+    private func capsulePlayPauseMenuTitle() -> String {
+        let action = MusicController.shared.playbackState == .playing ? "暂停" : "播放"
+        return KeyboardShortcutCatalog.menuTitle(action: action)
+    }
+
+    /// 胶囊右键菜单 → 打开完整键位说明面板（复用菜单栏同一入口）。
+    @objc private func menuShowShortcuts() {
+        KeyboardShortcutsHelpController.shared.show()
     }
 
     @objc private func menuTogglePlay() {
