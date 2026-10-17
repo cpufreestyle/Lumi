@@ -8,6 +8,8 @@ enum DesktopLyricsLayout {
     static let lockedKey    = "music_desktop_lyrics_locked"
     static let originKey    = "music_desktop_lyrics_origin"
     static let sizeScaleKey = "music_desktop_lyrics_size"
+    /// 多屏镜像开关：在主浮窗所在屏以外的每块屏同步显示同一份歌词。
+    static let mirrorKey     = "music_desktop_lyrics_mirror"
 
     // MARK: - 尺寸常量
     static let minWidth: CGFloat = 200
@@ -140,7 +142,11 @@ enum DesktopLyricsLayout {
                             originalFontSize: CGFloat = DesktopLyricsLayout.originalFontSize,
                             translationFontSize: CGFloat = DesktopLyricsLayout.translationFontSize,
                             sizeScale: CGFloat = 1.0,
-                            trailingReserve: CGFloat = 0)
+                            trailingReserve: CGFloat = 0,
+                            /// 用户自定两行间距（AppState.lyricLineSpacing，设置滑杆 0...20）。
+                            /// 仅双语（译文行真实存在）时叠加：单行没有第二行，加了只会虚高窗口。
+                            /// 默认 0 与历史观感、既有测试逐字节一致。
+                            lineSpacing: CGFloat = 0)
         -> CGSize {
         let wantTranslation = showTranslation && !translation.isEmpty
         // 实际渲染字号（含语言放大 + 英文译文不低于中文原文）只在这里算一次
@@ -173,6 +179,9 @@ enum DesktopLyricsLayout {
         var height = originalHeight * sizeScale * originalRatio + verticalPadding
         if wantTranslation {
             height += translationHeight * sizeScale * translationRatio
+            // 用户自定义的两行间距（与胶囊 AppState.lyricLineSpacing 同一设置源，
+            // 设置滑杆 0...20）：不叠进行高，间距调大后译文行会被窗口底边裁掉。
+            height += lineSpacing
         }
         return CGSize(width: finalWidth, height: height)
     }
@@ -196,6 +205,14 @@ enum DesktopLyricsLayout {
     static func screenFrame(containing point: CGPoint, screens: [CGRect]) -> CGRect {
         if let hit = screens.first(where: { $0.contains(point) }) { return hit }
         return screens.first ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    }
+
+    /// 点落在哪块屏（返回 screens 下标）；没有任何屏包含该点时返回 nil。
+    /// 多屏镜像用它判定主浮窗当前停在哪块屏，从而只给「另一块屏」建镜像。
+    /// 与 screenFrame 同一套匹配规则，但保留下标信息（镜像是按屏增删，不是按矩形）。
+    /// 纯函数，便于 LumiTests 单测。
+    static func screenIndex(containing point: CGPoint, screens: [CGRect]) -> Int? {
+        screens.firstIndex(where: { $0.contains(point) })
     }
 
     /// 恢复位置时该用哪块屏：优先「保存点落在其中」的那块，避免跨屏布局变化后
@@ -224,6 +241,25 @@ enum DesktopLyricsLayout {
     static func defaultOrigin(size: CGSize, visibleFrame: CGRect) -> CGPoint {
         CGPoint(x: visibleFrame.midX - size.width / 2,
                 y: visibleFrame.minY + defaultBottomOffset)
+    }
+
+    /// 多屏镜像的落点：与主浮窗默认位同一套算法（目标屏可见区水平居中、底部上方）。
+    /// 每块副屏各自归位，不会几块屏的歌词全叠到同一个坐标上。
+    /// 纯函数，便于 LumiTests 单测。
+    static func mirrorOrigin(size: CGSize, visibleFrame: CGRect) -> CGPoint {
+        defaultOrigin(size: size, visibleFrame: visibleFrame)
+    }
+
+    /// 是否需要建多屏镜像：开关打开且屏幕数 > 1。
+    /// 单屏时开开关也不建，避免在同一块屏上叠出一个重复浮窗。
+    static func shouldMirror(screenCount: Int, enabled: Bool) -> Bool {
+        enabled && screenCount > 1
+    }
+
+    /// 需要建镜像的屏幕下标集合：除主浮窗当前所在屏以外的所有屏。
+    static func mirrorScreenIndices(screenCount: Int, primaryIndex: Int) -> [Int] {
+        guard screenCount > 1 else { return [] }
+        return (0..<screenCount).filter { $0 != primaryIndex }
     }
 
     /// 位置持久化编码："x,y"（取整，避免每次拖动都产生新字符串写入 UserDefaults）。

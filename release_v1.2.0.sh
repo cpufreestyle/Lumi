@@ -1,12 +1,12 @@
 #!/bin/bash
-# v1.1.20 发布脚本：打包 .app → 提交 → 打 tag → 建 GitHub Release
+# v1.2.0 发布脚本：打包 .app → 提交 → 打 tag → 建 GitHub Release
 set -e
 cd "$(dirname "$0")"
 
 APP="Lumi/.build/Lumi.app"
-ZIP="Lumi-v1.1.20.zip"
-VERSION="v1.1.20"
-MSG="v1.1.20: 架构优化——拆分巨型文件、单测 10→41、修复并发问题、插件市场修复"
+ZIP="Lumi-v1.2.0.zip"
+VERSION="v1.2.0"
+MSG="v1.2.0: Liquid Glass 苹果 UI 改造 + 模块分层重构 + AI/听写/TV 新模块"
 
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 LUMI_SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
@@ -14,10 +14,10 @@ LUMI_SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
 TOKEN=$(echo "url=https://github.com" | git credential fill 2>/dev/null | grep '^password=' | cut -d= -f2)
 [ -z "$TOKEN" ] && { echo "❌ 未获取到 GitHub token"; exit 1; }
 
-# 1. 更新版本号
-echo "🔧 更新版本号 → 1.1.20"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.1.20" Lumi/Resources/Info.plist
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1.1.20" Lumi/Resources/Info.plist
+# 1. 更新版本号（幂等：已为 1.2.0 时重复设置无副作用）
+echo "🔧 更新版本号 → 1.2.0"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.2.0" Lumi/Resources/Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1.2.0" Lumi/Resources/Info.plist
 
 # 2. 编译（必须指定 26.5 SDK，否则 SwiftUI 宏解析失败）
 echo "🎵 编译 Lumi..."
@@ -30,15 +30,17 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "Lumi/.build/debug/Lumi" "$APP/Contents/MacOS/Lumi"
 cp "Lumi/Resources/Info.plist" "$APP/Contents/Info.plist"
 [ -f "Lumi/Resources/AppIcon.icns" ] && cp "Lumi/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+# SwiftPM 资源包（插件市场离线 feed）
+[ -d "Lumi/.build/debug/Lumi_Lumi.bundle" ] && cp -R "Lumi/.build/debug/Lumi_Lumi.bundle" "$APP/Contents/Resources/"
 codesign --force --deep --sign - "$APP" 2>/dev/null || true
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "✅ $ZIP ($(du -h "$ZIP" | cut -f1))"
 
-# 4. 提交版本号变更
+# 4. 提交（版本号/脚本变动；无改动时跳过）
 echo "📝 提交改动"
-git add Lumi/Resources/Info.plist release_v1.1.20.sh
+git add Lumi/Resources/Info.plist release_v1.2.0.sh
 git commit -m "$MSG" || echo "（无新改动可提交）"
 
 # 5. 打 tag + 推送
@@ -53,11 +55,10 @@ RESP=$(curl -s --retry 3 -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   "https://api.github.com/repos/cpufreestyle/Lumi/releases" \
-  -d '{"tag_name":"v1.1.20","name":"v1.1.20","body":"## v1.1.20 更新内容\n\n### 架构与质量\n- 拆分 ContentView/main/MusicController 三个巨型文件为职责单一模块\n- 单元测试 10 → 41 用例（激活码验证/插件清单/更新器）\n- 修复 4 处并发与主线程问题（数据竞争 x2、主线程 I/O、无锁数组写）\n\n### 插件系统\n- 修复下载包偶发安装失败（URLSession 临时文件生命周期）\n- 插件标签无数据时显示占位面板，不再回退音乐\n- 移除插件模块调试日志\n\n### 交互\n- 动态岛 hover-only：鼠标离开刘海即收起，双击刘海切换固定\n- yt-dlp 路径解析支持 brew symlink 与 PATH 优先","draft":false,"prerelease":false}')
-UPLOAD_ID=$(echo "$RESP" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+  -d '{"tag_name":"v1.2.0","name":"v1.2.0","body":"## v1.2.0 更新内容\n\n- **Liquid Glass 苹果 UI 改造**：展开面板、音量 HUD、提示条、许可证面板等浮层改用 macOS 26 系统玻璃，旧系统（< 26）自动回退手搓材质；收缩态胶囊保持纯黑，继续 1:1 贴合真刘海\n- **模块分层重构**：14 个单体文件拆为各模块 Views/Controllers/Models/Services 目录\n- **新增模块**：AIAssist（AI 动作条）、CLIUsage（CLI 用量统计）、Dictation（语音听写）、TV（电视遥控）\n- **桌面歌词**：右键短按切换播放/暂停，与胶囊同一套键位观（左键拖拽 / 中键切歌 / 滚轮字号 / 右键播控）\n- **快捷键提示可发现化**：菜单栏图标菜单新增「快捷键与手势说明」面板（不再只藏在胶囊右键长按里），胶囊右键菜单文案改与面板同源；新增 KeyboardShortcutCatalog 单一数据源 + 8 条不变量测试\n- **标签栏固定两行**：布局计算抽为纯逻辑 TabBarLayout 并由测试守护\n- 质量：swift build 通过、559 个单元测试全部通过（含快捷键目录与全局快捷键匹配不变量测试）\n\n> 版本 1.1.21 → 1.2.0","draft":false,"prerelease":false}')
+UPLOAD_ID=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))")
 echo "Release ID: $UPLOAD_ID"
 if [ -n "$UPLOAD_ID" ]; then
-  # 上传主程序 zip（--retry 5 抗网络抖动）
   curl -s --retry 5 --retry-delay 5 -X POST \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/zip" \

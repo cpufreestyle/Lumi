@@ -122,7 +122,17 @@ final class MusicController: ObservableObject {
     @Published var desktopLyricsSizePreset: DesktopLyricsSizePreset = .medium {
         didSet {
             UserDefaults.standard.set(desktopLyricsSizePreset.rawValue,
-                                      forKey: DesktopLyricsLayout.sizeScaleKey)
+            forKey: DesktopLyricsLayout.sizeScaleKey)
+        }
+    }
+    /// 多屏镜像：在主浮窗所在屏以外的每块屏同步显示同一份歌词（只读、点击穿透）。
+    /// 典型用法：主屏干活、竖屏专职看词。关闭只收掉镜像，不影响主浮窗。
+    @Published var desktopLyricsMirrorEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(desktopLyricsMirrorEnabled,
+                                      forKey: DesktopLyricsLayout.mirrorKey)
+            // 主浮窗还没建出来时先只记状态，showWindow 会按这个状态补建镜像。
+            desktopLyricsWindow?.setMirrorEnabled(desktopLyricsMirrorEnabled)
         }
     }
     /// 浮窗是否被用户主动隐藏（悬停控制条 × 或设置区按钮）。
@@ -140,6 +150,8 @@ final class MusicController: ObservableObject {
             }
             desktopLyricsWindow?.setLocked(desktopLyricsLocked)
             desktopLyricsWindow?.showWindow()
+            // 关开关期间翻转过镜像状态时，主浮窗重建后要按最新状态补建/收掉镜像。
+            desktopLyricsWindow?.setMirrorEnabled(desktopLyricsMirrorEnabled)
             // 开开关等于明确「我想看浮窗」的诉求，顺手清掉上一次的临时隐藏状态。
             desktopLyricsHidden = false
         } else {
@@ -830,6 +842,8 @@ final class MusicController: ObservableObject {
         desktopLyricsLocked = UserDefaults.standard.object(forKey: DesktopLyricsLayout.lockedKey) as? Bool ?? false
         desktopLyricsSizePreset = DesktopLyricsSizePreset.stored(
             UserDefaults.standard.string(forKey: DesktopLyricsLayout.sizeScaleKey))
+        // init 内赋值不触发 didSet，镜像状态在这里显式恢复一次（与上面三个同套路）
+        desktopLyricsMirrorEnabled = UserDefaults.standard.object(forKey: DesktopLyricsLayout.mirrorKey) as? Bool ?? false
         applyDesktopLyricsVisibility()
     }
 
@@ -3380,7 +3394,6 @@ extension MusicController {
         // 记下本轮代次：回调时若已过期（用户切了模式/换了歌），整批放弃。
         // 串行队列保证批次之间不会真并发，但「旧批次还没跑完就又开一轮」
         // 是可能的（切模式 → 立即重新翻译），靠代次把旧的那轮踢掉。
-        let generation = translationGeneration
         // 待译文本：translation 为 nil 或空字符串都算未翻译
         //（避免"假完成"——空译文被当成已完成而永不重译）
         let pending = synced.filter {
@@ -3443,7 +3456,15 @@ extension MusicController {
                 return
             }
             let srcs = pending
-            var attempts = 0
+            // 缓存查询闭包在 processBatch 体内定义（非隔离上下文）：
+            // applyResult 是会被闭包调用的 local func，其内部再捕获非 Sendable 的
+            // self 会被判为 isolated closure，Swift 6 语言模式下直接报错。
+            let cachedTranslation: (String) -> String? = { [weak self] key in
+                guard let self = self else { return nil }
+                var value: String?
+                self.translationQueue.sync { value = self.translationCache[key] }
+                return value
+            }
             /// 代次已校验且已在主线程：落译文并推进下一批。
             func applyResult(_ translated: [String]?, _ currentAttempts: Int) {
                 if let translated = translated, translated.count == srcs.count {
@@ -3458,15 +3479,15 @@ extension MusicController {
                 } else if currentAttempts < 2 {
                     // 整批失败：重试一次（限流往往是突发并发导致，稍后重试大多成功）
                     self.translationSchedulerQueue.asyncAfter(deadline: .now() + 0.8) {
-                        attempt()
+                        attempt(currentAttempts + 1)
                     }
                 } else {
                     // 重试仍失败：逐行兜底翻译（每条计入批次完成信号）
+                    // 先按「仍未缓存」筛一遍，形状与上方 pending 一致；
+                    // 读缓存走外部闭包，循环内不再捕获 self。
+                    let uncached = srcs.filter { cachedTranslation($0) == nil }
                     let subgroup = DispatchGroup()
-                    for src in srcs {
-                        var cached: String?
-                        self.translationQueue.sync { cached = self.translationCache[src] }
-                        guard cached == nil else { continue }
+                    for src in uncached {
                         subgroup.enter()
                         self.translateWithRetry(text: src, attempt: 1) { tr in
                             defer { subgroup.leave() }
@@ -3484,19 +3505,20 @@ extension MusicController {
                     }
                 }
             }
-            func attempt() {
-                attempts += 1
-                self.translateBatchWithRetry(lines: srcs, attempt: attempts) { translated in
+            func attempt(_ currentAttempts: Int) {
+                self.translateBatchWithRetry(lines: srcs, attempt: currentAttempts) { [weak self] translated in
+                    guard let self = self else { return }
                     // 代次过期：本轮批次的译文已不属于当前播放上下文，丢弃。
                     // 代次是主线程状态，而网络回调可能在后台线程，必须回主线程比。
                     // 过期批次若继续写译文，会与新一轮的译文交错，出现原文/译文错配。
-                    DispatchQueue.main.async {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
                         guard generation == self.translationGeneration else { return }
-                        applyResult(translated, attempts)
+                        applyResult(translated, currentAttempts)
                     }
                 }
             }
-            attempt()
+            attempt(1)
         }
         translationSchedulerQueue.async { processBatch(at: 0) }
     }

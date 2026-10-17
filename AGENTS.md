@@ -10,6 +10,9 @@ Lumi 是一个 **Swift macOS 桌面应用 + Node.js 后端服务** 的双组件�
 | **Node.js 后端** | Express + jsonwebtoken | `server.js` | 托管静态前端、签发 Apple MusicKit JWT 开发者令牌、提供配置 API、激活码换发 |
 
 Swift 包位于 `Lumi/` 子目录，使用 `Lumi/Package.swift` 管理。Node.js 包位于项目根目录，使用 `package.json` 管理。
+> **契约与验证**：行为契约与外部依赖见 `spec.md`，跑测试的入口与顺序见 `harness.md`。
+> 触及契约（行为约定、后端端点、授权分支、快捷键目录）的任何改动，必须同时更新
+> 这两份文档与对应测试，否则视为未完成。
 
 ## 2. Swift 工具链约束
 

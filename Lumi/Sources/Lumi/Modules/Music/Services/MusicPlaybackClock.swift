@@ -47,7 +47,15 @@ extension MusicController {
         playbackClockTimer = nil
         let timer = Timer(timeInterval: Self.playbackClockInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.advanceInterpolatedProgress()
+            // Timer 的 block 是 @Sendable（非隔离），编译器无从证明它跑在主线程，
+            // 直接调 @MainActor 方法会告警，Swift 6 语言模式下升级为编译错误。
+            // 定时器由 RunLoop.main 持有，闭包必然在主线程执行；assumeIsolated 把这个
+            // 事实显式告诉编译器：同步调用、零额外跳转——20Hz 下若改走
+            // DispatchQueue.main.async 会每拍多一次 RunLoop 轮转，白白加一拍延迟。
+            // 误改到非主线程 RunLoop 时 debug 下立即崩，而不是静默地跨线程写 UI 状态。
+            MainActor.assumeIsolated {
+                self.advanceInterpolatedProgress()
+            }
         }
         // .common：拖动滑块 / 滚动歌词区时 RunLoop 仍会派发，避免补间在交互期间停摆。
         RunLoop.main.add(timer, forMode: .common)

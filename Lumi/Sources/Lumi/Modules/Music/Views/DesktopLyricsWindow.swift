@@ -24,8 +24,18 @@ final class DesktopLyricsWindowController: ObservableObject {
     /// SwiftUI 侧经 @ObservedObject 读取会直接编译不过。写入只走本类与 MusicController。
     @Published var sizePreset: DesktopLyricsSizePreset = .medium
 
+    /// 用户自定义的两行间距（与胶囊同一设置源：AppState.lyricLineSpacing，设置滑杆
+    /// 0...20）。视图侧直接用 AppState.shared 读值重算，这里只服务窗口高度：
+    /// 间距变大必须同步加高，否则译文行被窗口底边裁掉（与胶囊行为对齐）。
+    private var lineSpacing: CGFloat = AppState.shared.lyricLineSpacing
+
     private let music: MusicController
     private var panel: NSPanel?
+    /// 多屏镜像面板，key 是各屏的 CGDirectDisplayID（NSScreenNumber）。
+    /// 主浮窗停在哪块屏，那块屏就不在字典里；拔屏/拖屏后按同一把钥匙增删。
+    private var mirrorPanels: [CGDirectDisplayID: NSPanel] = [:]
+    /// 镜像开关（跟随 MusicController.desktopLyricsMirrorEnabled，落 UserDefaults）。
+    private var mirrorEnabled = false
     private var cancellables = Set<AnyCancellable>()
     /// 悬停控制条（字号小/中/大 + 隐藏），作为 hosting 视图子视图钉在右上角。
     private weak var controlsBar: DesktopLyricsControlsBar?
@@ -97,6 +107,29 @@ final class DesktopLyricsWindowController: ObservableObject {
                 self.applyLayout()
             }
             .store(in: &cancellables)
+        // 行间距变化：用户在设置里调「歌词行间距」（0...20），胶囊与浮窗同一设置源。
+        // 浮窗必须跟着重排，否则只改胶囊间距、译文行仍按旧高度裁切。
+        AppState.shared.$lyricLineSpacing
+            .receive(on: main)
+            .sink { [weak self] spacing in
+                guard let self, self.lineSpacing != spacing else { return }
+                self.lineSpacing = spacing
+                self.applyLayout()
+            }
+            .store(in: &cancellables)
+        // 插拔屏 / 旋转 / 分辨率变化：重新对齐镜像面板集合并重排几何。
+        NotificationCenter.default.publisher(
+            for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: main)
+            .sink { [weak self] _ in self?.handleScreenParametersChanged() }
+            .store(in: &cancellables)
+    }
+
+    /// 屏幕配置变了：主浮窗要重新钳位（拔掉所在屏时不能停在屏外），
+    /// 镜像要按新的屏幕集合增删。副屏插入时用户不会特意来通知，所以这里兜住。
+    private func handleScreenParametersChanged() {
+        applyLayout()
+        syncMirrors()
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
@@ -106,10 +139,12 @@ final class DesktopLyricsWindowController: ObservableObject {
         refresh()
         // fullscreen 空间里普通 orderFront 可能被系统全屏窗口盖住，用 Regardless。
         panel?.orderFrontRegardless()
+        showMirrors()
     }
 
     func hideWindow() {
         panel?.orderOut(nil)
+        mirrorPanels.values.forEach { $0.orderOut(nil) }
     }
 
     func setLocked(_ locked: Bool) {
@@ -117,6 +152,129 @@ final class DesktopLyricsWindowController: ObservableObject {
         panel?.ignoresMouseEvents = locked
         // 锁定时鼠标穿透，悬停控制条已无意义，直接收起避免留下一点不动的残影。
         if locked { setControlsVisible(false) }
+    }
+
+    // MARK: - 多屏镜像（副屏只读同步）
+
+    /// 镜像总开关：MusicController.desktopLyricsMirrorEnabled 的落点。幂等，
+    /// 重复调用同一状态直接返回（Combine 回流会带重复值）。
+    func setMirrorEnabled(_ on: Bool) {
+        guard mirrorEnabled != on else { return }
+        mirrorEnabled = on
+        if on { showMirrors() } else { teardownMirrors() }
+    }
+
+    /// 建/对齐镜像面板并把它们全部提到最前。主浮窗还没建出来时只记状态不建窗，
+    /// 等 showWindow 补建（避免为一个还没显示的浮窗先造一批副屏窗口）。
+    private func showMirrors() {
+        guard mirrorEnabled, panel != nil else { return }
+        syncMirrors()
+        mirrorPanels.values.forEach { $0.orderFrontRegardless() }
+    }
+
+    /// 收掉全部镜像：关开关、关浮窗开关时走这里。镜像不随主浮窗一起常驻，
+    /// 关掉即刻消失，不留一块看不见却占着空间的副屏窗口。
+    private func teardownMirrors() {
+        mirrorPanels.values.forEach { mirror in
+            mirror.orderOut(nil)
+            mirror.close()
+        }
+        mirrorPanels.removeAll()
+    }
+
+    /// 按当前屏幕配置对齐镜像面板集合：主浮窗停在哪块屏，那块屏就不镜像。
+    /// 触发点有三个 —— 开开关、屏幕插拔/旋转（didChangeScreenParameters）、
+    /// 主浮窗被拖到另一块屏（handleDragEnd）。
+    private func syncMirrors() {
+        guard mirrorEnabled, let panel else { return }
+        let screens = NSScreen.screens
+        let primary = DesktopLyricsLayout.screenIndex(
+            containing: CGPoint(x: panel.frame.midX, y: panel.frame.midY),
+            screens: screens.map(\.frame)) ?? 0
+        let wanted = Set(DesktopLyricsLayout.mirrorScreenIndices(
+            screenCount: screens.count, primaryIndex: primary)
+            .compactMap { displayID(of: screens[$0]) })
+        // 1) 目标集合里没有的：拔屏、或主浮窗被拖到了那块屏上，收掉
+        for (id, mirror) in mirrorPanels where !wanted.contains(id) {
+            mirror.orderOut(nil)
+            mirror.close()
+            mirrorPanels[id] = nil
+        }
+        // 2) 目标集合里缺的：新插屏、或主浮窗离开了原来的屏，补建
+        for id in wanted where mirrorPanels[id] == nil {
+            guard let screen = screens.first(where: { displayID(of: $0) == id }) else { continue }
+            let mirror = makeMirrorPanel(on: screen)
+            mirrorPanels[id] = mirror
+            mirror.orderFrontRegardless()
+        }
+        layoutMirrors()
+    }
+
+    /// 建一块副屏只读镜像：与主浮窗同一份内容视图（同一个控制器状态），字号档位、
+    /// 双语、行距、空态文案全部自动跟随。两处刻意不同：没有右上角控制条（所以文字
+    /// 右缘不做让位收尾），以及 ignoresMouseEvents —— 那块屏要照常干活。
+    private func makeMirrorPanel(on screen: NSScreen) -> NSPanel {
+        // 首帧尺寸随便给：layoutMirrors 紧跟着就按 lyric 实测尺寸重排。
+        let panel = NSPanel(contentRect: NSRect(origin: screen.visibleFrame.origin,
+                                                size: NSSize(width: 360, height: 60)),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.isMovableByWindowBackground = false
+        // 跟随所有工作区 + 可叠加在全屏窗口之上（与主浮窗同一套 collectionBehavior）。
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        // 关键：副屏是「干活 + 顺带看词」，镜像不抢点击、不参与拖拽与悬停。
+        panel.ignoresMouseEvents = true
+        let root = DesktopLyricsContentView(controller: self, isMirror: true)
+        let hosting = DesktopLyricsHostingView(rootView: root)
+        hosting.sizingOptions = []
+        panel.contentView = hosting
+        return panel
+    }
+
+    /// 镜像排布：每块副屏各自按「可见区底部居中」停靠，尺寸与主浮窗同一套算法
+    ///（唯一差别 trailingReserve 归零 —— 镜像没有控制条要避让）。
+    private func layoutMirrors() {
+        guard !mirrorPanels.isEmpty else { return }
+        let size = mirrorContentSize()
+        for (id, mirror) in mirrorPanels {
+            guard let screen = NSScreen.screens.first(where: { displayID(of: $0) == id }) else { continue }
+            let origin = DesktopLyricsLayout.mirrorOrigin(size: size,
+                                                          visibleFrame: screen.visibleFrame)
+            if abs(mirror.frame.width - size.width) > 0.5
+                || abs(mirror.frame.height - size.height) > 0.5
+                || abs(mirror.frame.minX - origin.x) > 0.5
+                || abs(mirror.frame.minY - origin.y) > 0.5 {
+                mirror.setFrame(CGRect(origin: origin, size: size), display: true)
+            }
+        }
+    }
+
+    /// 镜像用的内容尺寸：与 applyLayout 同一套输入，只有 trailingReserve 不同。
+    private func mirrorContentSize() -> CGSize {
+        let displayLine = line.isEmpty ? hint : line
+        let showTr = showTranslation && !line.isEmpty && !translation.isEmpty
+        return DesktopLyricsLayout.contentSize(
+            line: displayLine,
+            translation: showTr ? translation : "",
+            showTranslation: showTr,
+            originalFontSize: DesktopLyricsLayout.originalFontSize * sizePreset.scale,
+            translationFontSize: DesktopLyricsLayout.translationFontSize * sizePreset.scale,
+            sizeScale: sizePreset.scale,
+            trailingReserve: 0,
+            lineSpacing: lineSpacing)
+    }
+
+    /// NSScreen 的稳定标识（CoreGraphics display ID）：插拔屏、旋转后仍指向同一块屏，
+    /// 用它做镜像面板的 key 才能按屏幕增删，而不是整批重建导致闪烁。
+    private func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+            .uint32Value ?? 0
     }
 
     // MARK: - 面板创建（懒创建，关闭只隐藏不销毁）
@@ -135,8 +293,9 @@ final class DesktopLyricsWindowController: ObservableObject {
             originalFontSize: DesktopLyricsLayout.originalFontSize * sizePreset.scale,
             translationFontSize: DesktopLyricsLayout.translationFontSize * sizePreset.scale,
             sizeScale: sizePreset.scale,
-            trailingReserve: controlsTrailingReserve)
-    let origin = restoredOrigin(size: size)
+            trailingReserve: controlsTrailingReserve,
+            lineSpacing: lineSpacing)
+        let origin = restoredOrigin(size: size)
         let panel = DesktopLyricsPanel(contentRect: NSRect(origin: origin, size: size),
                             styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
@@ -249,8 +408,9 @@ final class DesktopLyricsWindowController: ObservableObject {
             originalFontSize: DesktopLyricsLayout.originalFontSize * sizePreset.scale,
             translationFontSize: DesktopLyricsLayout.translationFontSize * sizePreset.scale,
             sizeScale: sizePreset.scale,
-            trailingReserve: controlsTrailingReserve)
-    let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            trailingReserve: controlsTrailingReserve,
+            lineSpacing: lineSpacing)
+        let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
             ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let base = persistedOrigin
             ?? DesktopLyricsLayout.decode(
@@ -265,6 +425,7 @@ final class DesktopLyricsWindowController: ObservableObject {
             || abs(frame.minY - origin.y) > 0.5 {
             panel.setFrame(CGRect(origin: origin, size: size), display: true)
         }
+        layoutMirrors()
     }
 
     // MARK: - 悬停控制条（字号小/中/大 + 隐藏）
@@ -351,6 +512,10 @@ final class DesktopLyricsWindowController: ObservableObject {
         let previous = persistedOrigin ?? clamped
         persistedOrigin = clamped
         panel.setFrameOrigin(clamped)
+        // 主浮窗换了屏幕：原属屏不再镜像、新所在屏补上。
+        // 必须在 setFrameOrigin 之后 —— syncMirrors 靠 panel 中心点判主屏，
+        // 先同步会把主浮窗判成「还在旧屏」，于是那块屏既留镜像又迎来主浮窗。
+        syncMirrors()
         if DesktopLyricsLayout.shouldPersist(from: previous, to: clamped) {
             UserDefaults.standard.set(DesktopLyricsLayout.encode(origin: clamped),
                                       forKey: DesktopLyricsLayout.originKey)
@@ -378,12 +543,21 @@ private final class DesktopLyricsPanel: NSPanel {
 /// 浮窗内容：当前歌词行 + 译文，深色半透明圆角底。仅一行（行数由控制器尺寸撑开）。
 private struct DesktopLyricsContentView: View {
     @ObservedObject var controller: DesktopLyricsWindowController
+    /// 副屏镜像：同一份内容视图复用，但没有右上角控制条要避让，
+    /// 于是文字右缘不做让位收尾（与 mirrorContentSize 的 trailingReserve: 0 对偶）。
+    var isMirror: Bool = false
+    /// 行间距跟随用户设置（AppState.lyricLineSpacing，与胶囊同一设置源）。
+    /// 直接读 AppState 而不经 controller 转发：controller 的行间距只服务窗口高度，
+    /// 视觉间距归视图管，两处各自订阅互不依赖。
+    @ObservedObject private var state = AppState.shared
 
     var body: some View {
-        // 0 间距：原文与译文靠各自文本框的自然行高贴合，中间不再留缝。
+        // 行间距跟随用户设置（默认 0）：原文与译文靠各自文本框的自然行高贴合，
+        // 中间不留缝；调大滑杆后两行之间按同一数值分开，窗口高度由
+        // DesktopLyricsLayout.contentSize 的 lineSpacing 同步加高（不会裁掉译文行）。
         // 之前 spacing: 3 + .vertical 7 + 常量 verticalPadding 14 三重叠加，
         // 浮窗比文字高出一截，观感就是「空隙太大」。
-        VStack(spacing: 0) {
+        VStack(spacing: state.lyricLineSpacing) {
             let displayLine = controller.line.isEmpty ? controller.hint : controller.line
             let wantTranslation = controller.showTranslation && !controller.translation.isEmpty
             // 与窗口尺寸同一套字号算法（bilingualSizes）：英文行不低于中文行。
@@ -415,7 +589,7 @@ private struct DesktopLyricsContentView: View {
         // 右上角控制条让位：与窗口加宽量同源（DesktopLyricsControlsMetrics.trailingReserve），
         // 文字块右缘停在按钮左侧，hover 淡入药丸也不会压住歌词；
         // 与胶囊 IslandViews 的 .padding(.trailing, lyricTrailingReserve) 同一做法。
-        .padding(.trailing, DesktopLyricsControlsMetrics.trailingReserve)
+        .padding(.trailing, isMirror ? 0 : DesktopLyricsControlsMetrics.trailingReserve)
         .padding(.vertical, 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         // macOS 26+ 用系统 Liquid Glass 底板（浮窗是 clear 无边框面板，玻璃会正确

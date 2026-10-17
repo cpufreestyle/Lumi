@@ -40,3 +40,7 @@ build.log
 .codely-cli/
 .mimosa/
 vibe_images/
+
+# 本地 agent 工具运行时目录（空目录/插件挂载点，非项目源码）
+.v2c/
+.video_agent/

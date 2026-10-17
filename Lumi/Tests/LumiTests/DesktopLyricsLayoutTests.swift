@@ -474,6 +474,78 @@ final class DesktopLyricsLayoutTests: XCTestCase {
         XCTAssertEqual(legacy.height, explicitOne.height, accuracy: 0.001)
     }
 
+    // MARK: - 用户自定行间距（与胶囊同一设置源）
+
+    func testLineSpacingOnlyAffectsBilingualRow() {
+        // 单行没有第二行，间距无从体现：调了也必须保持原高（否则空窗口白白高一截）
+        let singleDefault = DesktopLyricsLayout.contentSize(line: "测试歌词",
+                                                            translation: "",
+                                                            showTranslation: false)
+        let singleSpaced = DesktopLyricsLayout.contentSize(line: "测试歌词",
+                                                           translation: "",
+                                                           showTranslation: false,
+                                                           lineSpacing: 12)
+        XCTAssertEqual(singleSpaced.height, singleDefault.height, accuracy: 0.001)
+
+        // 双语时按传入值精确加高一次：译文行不再被窗口底边裁掉
+        let bilingualDefault = DesktopLyricsLayout.contentSize(line: "你好",
+                                                               translation: "Hello",
+                                                               showTranslation: true)
+        let bilingualSpaced = DesktopLyricsLayout.contentSize(line: "你好",
+                                                              translation: "Hello",
+                                                              showTranslation: true,
+                                                              lineSpacing: 12)
+        XCTAssertEqual(bilingualSpaced.height - bilingualDefault.height, 12, accuracy: 0.001)
+    }
+
+    func testLineSpacingZeroMatchesLegacyCall() {
+        // 默认 0 必须与不传该参数的旧调用逐字节同尺寸（回归护栏：
+        // 没调过滑杆的老用户，浮窗既不变高也不变宽）
+        let line = "同一行歌词"
+        let legacy = DesktopLyricsLayout.contentSize(line: line,
+                                                    translation: "译文",
+                                                    showTranslation: true)
+        let explicitZero = DesktopLyricsLayout.contentSize(line: line,
+                                                           translation: "译文",
+                                                           showTranslation: true,
+                                                           lineSpacing: 0)
+        XCTAssertEqual(explicitZero.width, legacy.width, accuracy: 0.001)
+        XCTAssertEqual(explicitZero.height, legacy.height, accuracy: 0.001)
+    }
+
+    func testLineSpacingDoesNotChangeWidth() {
+        // 间距只该变高度：宽度若跟着变，行距一调窗口就左右抽动
+        let base = DesktopLyricsLayout.contentSize(line: "你好",
+                                                   translation: "Hello",
+                                                   showTranslation: true)
+        let spaced = DesktopLyricsLayout.contentSize(line: "你好",
+                                                     translation: "Hello",
+                                                     showTranslation: true,
+                                                     lineSpacing: 20)
+        XCTAssertEqual(spaced.width, base.width, accuracy: 0.001)
+    }
+
+    func testLineSpacingIsNotScaledBySizePreset() {
+        // 档位倍率只缩放两个字号行高，间距按原始 pt 加：与胶囊 IslandViews 的
+        // VStack(spacing: AppState.shared.lyricLineSpacing) 一致，跨档观感统一，
+        // 否则调 6pt 在「大」档会变成 8pt。
+        let scale: CGFloat = 1.12
+        let base = DesktopLyricsLayout.contentSize(line: "你好",
+                                                   translation: "Hello",
+                                                   showTranslation: true,
+                                                   originalFontSize: DesktopLyricsLayout.originalFontSize * scale,
+                                                   translationFontSize: DesktopLyricsLayout.translationFontSize * scale,
+                                                   sizeScale: scale)
+        let spaced = DesktopLyricsLayout.contentSize(line: "你好",
+                                                     translation: "Hello",
+                                                     showTranslation: true,
+                                                     originalFontSize: DesktopLyricsLayout.originalFontSize * scale,
+                                                     translationFontSize: DesktopLyricsLayout.translationFontSize * scale,
+                                                     sizeScale: scale,
+                                                     lineSpacing: 12)
+        XCTAssertEqual(spaced.height - base.height, 12, accuracy: 0.001)
+    }
+
     // MARK: - 恢复位置时选哪块屏
 
     func testVisibleFramePicksScreenContainingSavedPoint() {
@@ -531,6 +603,101 @@ final class DesktopLyricsLayoutTests: XCTestCase {
                                                     screens: screens)
         XCTAssertEqual(frame.minX, 0)
         XCTAssertEqual(frame.width, 1147)
+    }
+
+    // MARK: - 多屏镜像
+
+    func testShouldMirrorOnlyWhenEnabledAndMultipleScreens() {
+        // 关开关一律不镜像，哪怕插了八块屏。
+        XCTAssertFalse(DesktopLyricsLayout.shouldMirror(screenCount: 3, enabled: false))
+        XCTAssertFalse(DesktopLyricsLayout.shouldMirror(screenCount: 8, enabled: false))
+        // 开开关但只有一块屏：不能在同一块屏上叠出一个重复浮窗。
+        XCTAssertFalse(DesktopLyricsLayout.shouldMirror(screenCount: 1, enabled: true))
+        // 开开关且多屏才镜像。
+        XCTAssertTrue(DesktopLyricsLayout.shouldMirror(screenCount: 2, enabled: true))
+        XCTAssertTrue(DesktopLyricsLayout.shouldMirror(screenCount: 3, enabled: true))
+    }
+
+    func testMirrorScreenIndicesExcludesPrimaryScreen() {
+        // 副屏下标 = 除主浮窗所在屏以外的所有屏。
+        XCTAssertEqual(DesktopLyricsLayout.mirrorScreenIndices(screenCount: 2, primaryIndex: 0), [1])
+        XCTAssertEqual(DesktopLyricsLayout.mirrorScreenIndices(screenCount: 2, primaryIndex: 1), [0])
+        XCTAssertEqual(DesktopLyricsLayout.mirrorScreenIndices(screenCount: 3, primaryIndex: 1), [0, 2])
+        // 单屏时没有副屏可镜像。
+        XCTAssertEqual(DesktopLyricsLayout.mirrorScreenIndices(screenCount: 1, primaryIndex: 0), [])
+        // 主浮窗所在屏自身永远不出现在结果里，否则自己会被镜像一份。
+        XCTAssertFalse(DesktopLyricsLayout.mirrorScreenIndices(screenCount: 3, primaryIndex: 2)
+            .contains(2))
+    }
+
+    func testMirrorScreenIndicesBoundsSafeForOutOfRangePrimary() {
+        // 屏幕刚被拔掉时 primaryIndex 可能越界（调用方拿不到下标只能兜底），
+        // 此时仍要返回合法下标，不能让调用方去 screens[越界] 取屏崩溃。
+        let indices = DesktopLyricsLayout.mirrorScreenIndices(screenCount: 2, primaryIndex: 7)
+        XCTAssertEqual(indices.sorted(), [0, 1])
+        XCTAssertTrue(indices.allSatisfy { $0 >= 0 && $0 < 2 })
+    }
+
+    func testMirrorOriginMatchesDefaultOriginForEveryScreen() {
+        // 每块副屏各自「可见区底部居中」，与主浮窗默认位同一套算法 ——
+        // 几块屏的歌词不能全叠到同一个坐标上。
+        // 两块屏原点与尺寸都不同（横屏 + 竖屏），落点必须各自算各自的。
+        let screens = [CGRect(x: 0, y: 0, width: 3024, height: 1964),
+                       CGRect(x: -1152, y: 37, width: 1152, height: 2048)]
+        let size = CGSize(width: 360, height: 60)
+        for frame in screens {
+            XCTAssertEqual(DesktopLyricsLayout.mirrorOrigin(size: size, visibleFrame: frame),
+                           DesktopLyricsLayout.defaultOrigin(size: size, visibleFrame: frame))
+        }
+        // 换一块屏落点必须不同（否则「各自归位」这条规则失效）。
+        let onMain = DesktopLyricsLayout.mirrorOrigin(size: size, visibleFrame: screens[0])
+        let onSide = DesktopLyricsLayout.mirrorOrigin(size: size, visibleFrame: screens[1])
+        XCTAssertNotEqual(onMain.x, onSide.x)
+        XCTAssertNotEqual(onMain.y, onSide.y)
+    }
+
+    func testMirrorOriginStaysInsideVisibleFrame() {
+        // 竖屏（1152×2048）与横屏底部居中都不能把窗口甩出可见区。
+        let frames = [CGRect(x: 3024, y: 0, width: 1152, height: 2048),
+                      CGRect(x: 0, y: 0, width: 1512, height: 982)]
+        for frame in frames {
+            let size = CGSize(width: 400, height: 90)
+            let origin = DesktopLyricsLayout.mirrorOrigin(size: size, visibleFrame: frame)
+            XCTAssertGreaterThanOrEqual(origin.x, frame.minX)
+            XCTAssertLessThanOrEqual(origin.x + size.width, frame.maxX + 0.001)
+            XCTAssertGreaterThanOrEqual(origin.y, frame.minY)
+        }
+    }
+
+    func testScreenIndexReturnsIndexOfContainingScreen() {
+        let screens = [CGRect(x: 0, y: 0, width: 1000, height: 800),
+                       CGRect(x: 1000, y: 0, width: 1000, height: 800)]
+        // 主浮窗停在哪块屏，那块屏就不镜像 —— 命中必须返回正确下标。
+        XCTAssertEqual(DesktopLyricsLayout.screenIndex(
+            containing: CGPoint(x: 1500, y: 400), screens: screens), 1)
+        XCTAssertEqual(DesktopLyricsLayout.screenIndex(
+            containing: CGPoint(x: 500, y: 100), screens: screens), 0)
+    }
+
+    func testScreenIndexReturnsNilWhenPointOutsideAllScreens() {
+        let screens = [CGRect(x: 0, y: 0, width: 1000, height: 800)]
+        // 没有任何屏包含该点时返回 nil（调用方据此兜底，而不是猜一块屏）。
+        XCTAssertNil(DesktopLyricsLayout.screenIndex(
+            containing: CGPoint(x: 5000, y: 5000), screens: screens))
+        XCTAssertNil(DesktopLyricsLayout.screenIndex(
+            containing: CGPoint(x: -500, y: 100), screens: screens))
+    }
+
+    func testScreenIndexAgreesWithScreenFrameOnHit() {
+        // 同一套匹配规则：命中的下标其矩形必须真的包含该点，
+        // 否则「主浮窗所在屏」与「保存点所在屏」会判成两块屏。
+        let screens = [CGRect(x: 0, y: 0, width: 1000, height: 800),
+                       CGRect(x: 1000, y: 0, width: 1000, height: 800)]
+        let point = CGPoint(x: 1800, y: 700)
+        let index = DesktopLyricsLayout.screenIndex(containing: point, screens: screens)
+        XCTAssertNotNil(index)
+        XCTAssertEqual(DesktopLyricsLayout.screenFrame(containing: point, screens: screens),
+                       screens[index!])
     }
 
     // MARK: - CJK/拉丁检测与 latinScale
