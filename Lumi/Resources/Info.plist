@@ -38,5 +38,7 @@
 	<string>Lumi需要访问麦克风以进行语音听写转写。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>michaelqiu 出品</string>
 </dict>
 </plist>
