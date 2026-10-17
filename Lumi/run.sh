@@ -8,6 +8,7 @@
 #    ./run.sh restart  结束旧实例后重新启动
 #    ./run.sh check    查询是否正在运行
 #    ./run.sh tcc [--dry-run]  仅写入用户级 TCC 授权（--dry-run 仅预览）
+#    ./run.sh install  把 .build/Lumi.app 同步到 /Applications（默认不同步）
 # =====================================================
 set -e
 cd "$(dirname "$0")"
@@ -178,17 +179,36 @@ INSERT OR REPLACE INTO access
     echo "  📦 备份位于: $BACKUP"
   fi
 
-  # 把刚签好名的 $APP 同步到 /Applications：csreq 是按本机 cdhash 逐位钉死的，
-  # 而桌面快捷方式 / 双击打开走的是 /Applications/Lumi.app。不同步的话写进去的授权
-  # 只对 .build 那份生效，正式安装位一直失配 → 每次都要重新弹系统授权框。
-  INSTALL=/Applications/Lumi.app
-  if [[ "$APP" != "$INSTALL" ]]; then
-    if rm -rf "$INSTALL" 2>/dev/null && cp -R "$APP" "$INSTALL" 2>/dev/null; then
-      xattr -dr com.apple.quarantine "$INSTALL" 2>/dev/null || true
-      echo "  📦 已同步到 $INSTALL (cdhash 与授权记录一致)"
-    else
-      echo "  ⚠️  无法同步到 $INSTALL，正式安装位可能仍会弹授权框"
-    fi
+  # 安装位同步默认关闭，完整理由见 install_to_applications。只有显式要求时才顺带做，
+  # 否则每次 launch 都在 /Applications 留一份镜像，看着像两个 App。
+  if [[ "${LUMI_INSTALL_TO_APPLICATIONS:-0}" == "1" ]]; then
+    install_to_applications
+  else
+    echo "  ℹ️  未同步到 /Applications（默认跳过）；需要安装位请跑 ./run.sh install"
+  fi
+}
+
+# ---------- 同步到 /Applications（正式安装位） ----------
+# 为什么需要这一步：TCC 的 csreq 是按本机 cdhash 逐位钉死的，而双击打开 /
+# 桌面快捷方式走的是 /Applications/Lumi.app。不同步的话，写进去的授权只对
+# .build 那份生效，正式安装位一直失配 → 每次都要重新弹系统授权框。
+#
+# 为什么默认不做：实际运行的一直是 .build 这份（launch 里 open "$APP"），
+# /Applications 只是为「双击打开」留的镜像，平时反而让人以为是两个 App。
+# 桌面启动器（tools/make_desktop_shortcut.sh 生成的壳）本身就有 .build 回退，
+# 所以删掉安装位不影响任何启动路径。需要时显式跑 ./run.sh install。
+install_to_applications() {
+  local INSTALL=/Applications/Lumi.app
+  if [[ "$APP" == "$INSTALL" ]]; then
+    echo "  ℹ️  当前就在安装位，无需同步"
+    return 0
+  fi
+  if rm -rf "$INSTALL" 2>/dev/null && cp -R "$APP" "$INSTALL" 2>/dev/null; then
+    xattr -dr com.apple.quarantine "$INSTALL" 2>/dev/null || true
+    echo "  📦 已同步到 $INSTALL (cdhash 与授权记录一致)"
+  else
+    echo "  ⚠️  无法同步到 $INSTALL，正式安装位可能仍会弹授权框"
+    return 1
   fi
 }
 
@@ -229,5 +249,6 @@ case "${1:-}" in
     pids=$(pgrep -f "Contents/MacOS/Lumi")
     [ -n "$pids" ] && echo "RUNNING pids=$pids" || echo "NOT_RUNNING" ;;
   tcc)     tcc "${@:2}" ;;
+  install)  install_to_applications ;;
   *)       build; launch ;;
 esac
