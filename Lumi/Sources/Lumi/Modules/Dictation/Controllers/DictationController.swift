@@ -177,15 +177,25 @@ final class DictationController: ObservableObject {
             errorMessage = "没有可用的语音模型，请在下方下载 ggml-base.bin（约148MB）。"
             return
         }
-        // 麦克风授权：macOS 首次弹系统对话框；被拒后在面板里给出设置路径
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            DispatchQueue.main.async {
-                guard granted else {
-                    self?.errorMessage = "麦克风权限被拒绝：请在 系统设置 → 隐私与安全性 → 麦克风 中允许 Lumi。"
-                    return
+        // 麦克风授权：只对「尚未决定」调用 requestAccess。已授权直接开录，
+        // 被拒给出设置路径 —— 不做状态判断的话，每次录音都会再走一次授权调用，
+        // 系统设置里会反复出现「最近请求权限」提示。用户明确要求：
+        // 检测到已授权就不要重复提示。
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            beginRecording()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                DispatchQueue.main.async {
+                    guard granted else {
+                        self?.errorMessage = "麦克风权限被拒绝：请在 系统设置 → 隐私与安全性 → 麦克风 中允许 Lumi。"
+                        return
+                    }
+                    self?.beginRecording()
                 }
-                self?.beginRecording()
             }
+        default:
+            errorMessage = "麦克风权限被拒绝：请在 系统设置 → 隐私与安全性 → 麦克风 中允许 Lumi。"
         }
     }
 

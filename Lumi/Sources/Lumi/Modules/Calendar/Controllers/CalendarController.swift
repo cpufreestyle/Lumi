@@ -31,10 +31,19 @@ final class CalendarController: ObservableObject {
     }
 
     func requestAccess() {
-        store.requestFullAccessToEvents { [weak self] granted, _ in
-            DispatchQueue.main.async {
-                if granted { self?.fetchEvents() }
+        // 只在「尚未决定」时向系统要权限。已授权直接读数据，被拒静默放弃；
+        // 不做状态判断的话，每次 init 都会把请求再抛给系统 —— macOS 虽然不会
+        // 重复弹窗，但 EventKit 仍会走一次授权往返，还可能触发设置里的
+        // 「最近请求权限」提示。用户明确要求：检测到已授权就不要重复提示。
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if Self.shouldRequestEventAccess(status: status) {
+            store.requestFullAccessToEvents { [weak self] granted, _ in
+                DispatchQueue.main.async {
+                    if granted { self?.fetchEvents() }
+                }
             }
+        } else if status == .fullAccess {
+            fetchEvents()
         }
     }
 
@@ -122,5 +131,19 @@ final class CalendarController: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "EEEE"
         return f.string(from: date)
+    }
+
+    /// 授权守卫决策（纯函数，供 LumiTests 守住「已授权不再请求」的回归）。
+    ///
+    /// 用户明确要求「检测到已经授权就不要重复提示」。EventKit 的
+    /// requestFullAccessToEvents 在已授权时不会重复弹窗，但每次调用仍走一次
+    /// 授权往返，还会在系统设置里刷新「最近请求权限」的记录 —— 用户看到的就是
+    /// Lumi 反复在要权限。按状态分流可以彻底杜绝这个观感。
+    ///
+    /// - fullAccess：直接读数据，不再请求；
+    /// - notDetermined：首次请求（唯一允许触发系统弹窗的分支）；
+    /// - denied / restricted：静默放弃，不弹解释框也不反复尝试。
+    static func shouldRequestEventAccess(status: EKAuthorizationStatus) -> Bool {
+        status == .notDetermined
     }
 }

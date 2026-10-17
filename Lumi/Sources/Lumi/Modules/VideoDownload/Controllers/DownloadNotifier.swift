@@ -25,18 +25,33 @@ final class DownloadNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// 发送「下载完成」通报。授权被拒则静默跳过，不影响下载本身。
     func postCompletion(title: String) {
         let body = title.isEmpty ? "视频已保存到 Lumi Downloads" : title
-        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
-            guard granted, let self else { return }
-            let content = UNMutableNotificationContent()
-            content.title = "下载完成"
-            content.body = body
-            content.sound = .default
-            let request = UNNotificationRequest(
-                identifier: "lumi.download.\(UUID().uuidString)",
-                content: content,
-                trigger: nil
-            )
-            self.center.add(request)
+        // 先查当前状态，只在「尚未决定」时向系统要权限 —— 已授权直接发通知，
+        // 被拒静默放弃。无条件 requestAuthorization 会让每次下载完成都走一次
+        // 授权往返（系统虽不重复弹窗，但设置里会反复出现「最近请求」提示）。
+        center.getNotificationSettings { [weak self] settings in
+            let send: () -> Void = {
+                guard let self else { return }
+                let content = UNMutableNotificationContent()
+                content.title = "下载完成"
+                content.body = body
+                content.sound = .default
+                let request = UNNotificationRequest(
+                    identifier: "lumi.download.\(UUID().uuidString)",
+                    content: content,
+                    trigger: nil
+                )
+                self.center.add(request)
+            }
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                send()
+            case .notDetermined:
+                self?.center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted { send() }
+                }
+            default:
+                break
+            }
         }
     }
 
