@@ -8,6 +8,8 @@ enum PremiumFeature: String, CaseIterable, Identifiable {
     case claudeCode  = "Claude Code 集成"
     case codex       = "Codex 集成"
     case videoDownload = "视频下载 MP4/MP3 (1800+ 站点)"
+    case lyricsShare  = "歌词分享卡片（Musixmatch 付费同款）"
+    case lyricsGrammar = "逐行歌词语法注解（Musixmatch 语言学习档）"
     case futureAI    = "未来所有 AI 功能"
 
     var id: String { rawValue }
@@ -17,6 +19,8 @@ enum PremiumFeature: String, CaseIterable, Identifiable {
         case .claudeCode:  return "内置 Claude AI 编程助手标签，支持代码问答与生成"
         case .codex:       return "内置 OpenAI Codex 标签，实时代码补全与生成"
         case .videoDownload: return "从 1800+ 站点下载视频为 MP4 或提取 MP3 音频"
+        case .lyricsShare: return "把当前播放歌词渲染成玻璃质感卡片，一键分享到 AirDrop / 邮件 / 备忘录"
+        case .lyricsGrammar: return "对每行歌词请求 AI 语法注解：主谓 / 时态 / 固定搭配 / 生词，帮助语言学习者逐句吃透"
         case .futureAI:    return "所有未来新增 AI 功能的永久访问权限"
         }
     }
@@ -26,6 +30,8 @@ enum PremiumFeature: String, CaseIterable, Identifiable {
         case .claudeCode:  return "brain.head.profile"
         case .codex:       return "wand.and.stars"
         case .videoDownload: return "arrow.down.to.line"
+        case .lyricsShare: return "square.and.arrow.up"
+        case .lyricsGrammar: return "text.book.closed.fill"
         case .futureAI:    return "sparkles"
         }
     }

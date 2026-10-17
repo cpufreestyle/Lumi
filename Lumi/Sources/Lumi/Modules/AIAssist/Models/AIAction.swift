@@ -32,6 +32,12 @@ struct AIAction: Identifiable, Equatable, Sendable {
             icon: "pencil.line",
             systemPrompt: "把用户提供的文字改写得更专业、简洁、通顺，保持原意与事实不变，中文输出。只输出改写后的文字，不要说明改了什么。"
         ),
+        AIAction(
+            id: "grammar",
+            title: "语法",
+            icon: "text.book.closed.fill",
+            systemPrompt: "你是英语语法老师。对用户提供的英文句子给出 1-3 条语法注解，帮助中文学习者理解。每条格式：『语法要点』+（如有）关键短语 +（如有）例句。不要逐句翻译，不要多余客套。"
+        ),
     ]
 
     static func action(id: String) -> AIAction? {

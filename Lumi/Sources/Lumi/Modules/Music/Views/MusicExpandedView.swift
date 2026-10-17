@@ -45,8 +45,15 @@ struct MusicExpandedView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var music = MusicController.shared
     @ObservedObject private var state = AppState.shared
+    @ObservedObject private var license = LicenseManager.shared
     /// 卡片实际尺寸（随用户缩放变化）。据此让字幕字号与歌词区高度自适应卡片大小。
     @State private var viewSize: CGSize = CGSize(width: 360, height: 480)
+    /// 分享按钮导出过程防连点标记（ImageRenderer 同步，短暂 true 后在闭包末尾复位）。
+    @State private var isExportingCard = false
+    /// 逐行语法注解（Musixmatch 语言学习付费档）：notes / loading / error
+    @State private var grammarNotes: [LyricsGrammarNote.Note] = []
+    @State private var isRequestingNote = false
+    @State private var grammarNoteError: String? = nil
 
     // 歌词字号随卡片宽度线性缩放：基准 360 宽 → 17pt，并夹紧在合理区间，
     // 卡片放大时字变大、缩小时字变小，始终与卡片尺寸协调。
@@ -472,6 +479,15 @@ struct MusicExpandedView: View {
                             .help("重新获取歌词")
                         }
 
+                        // 歌词分享卡片 + 逐行语法注解（复刻 Musixmatch / Apple Music 付费功能）
+                        // Premium 各自解锁独立显示；原文为空（未播放 / 纯音乐）时均不可用。
+                        if license.isUnlocked(.lyricsShare) {
+                            shareCardButton
+                        }
+                        if license.isUnlocked(.lyricsGrammar) {
+                            grammarNoteButton
+                        }
+
                         // 桌面歌词浮窗一组：开关 / 锁定，与取词呈现、隐藏歌词集中在第二行。
                         HStack(spacing: 6) {
                             // 置顶小窗跟随当前歌词行，全屏/切 App 也能看。
@@ -631,6 +647,79 @@ struct MusicExpandedView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
+            }
+        }
+    }
+    // MARK: - 复刻付费功能：歌词分享卡片 + 逐行语法注解
+
+    /// 歌词分享卡片按钮（Musixmatch/Apple Music 付费同款）。
+    private var shareCardButton: some View {
+        Button(action: { exportShareCard() }) {
+            Image(systemName: isExportingCard ? "square.and.arrow.up.fill" : "square.and.arrow.up")
+                .font(.system(size: 11))
+                .foregroundColor(isExportingCard ? LyricsInk.primary : LyricsInk.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("分享歌词卡片")
+    }
+
+    /// 语法注解按钮（Musixmatch 语言学习付费档）。
+    private var grammarNoteButton: some View {
+        Button(action: { requestGrammarNote() }) {
+            Image(systemName: isRequestingNote ? "hourglass" : "text.book.closed.fill")
+                .font(.system(size: 11))
+                .foregroundColor(isRequestingNote ? LyricsInk.primary : LyricsInk.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("当前行语法注解")
+    }
+
+    /// 导出歌词卡片：渲染 → 系统分享面板。原文为空时静默返回（不弹空卡）。
+    private func exportShareCard() {
+        guard !isExportingCard else { return }
+        isExportingCard = true
+        defer { isExportingCard = false }
+        let card = LyricsShareCard(
+            title: music.title,
+            artist: music.artist,
+            original: music.currentLyricPair.text,
+            translation: music.currentLyricPair.translation)
+        guard card.hasShareableContent else { return }
+        guard let image = LyricsCardExporter.render(card, artwork: music.artwork) else { return }
+        LyricsCardExporter.share(image, fileName: card.suggestedFileName, from: nil, rect: .zero)
+    }
+
+    /// 请求当前行语法注解：AIAssist 链路 + LyricsGrammarNote 解析。
+    private func requestGrammarNote() {
+        guard !isRequestingNote else { return }
+        let line = music.currentLyricPair.text
+        guard !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        isRequestingNote = true
+        grammarNoteError = nil
+        grammarNotes = []
+        Task { @MainActor in
+            defer { isRequestingNote = false }
+            let prompt = LyricsGrammarNote.systemPrompt(for: line)
+            let action = AIAction(
+                id: "grammar-line",
+                title: "语法注解",
+                icon: "text.book.closed.fill",
+                systemPrompt: prompt)
+            let controller = AIAssistController.shared
+            controller.runAction(action, text: line)
+            let start = Date()
+            while controller.isStreaming && Date().timeIntervalSince(start) < 20 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            if let err = controller.errorMessage, !err.isEmpty {
+                grammarNoteError = err
+                return
+            }
+            let notes = LyricsGrammarNote.parseResponse(controller.resultText)
+            if notes.isEmpty {
+                grammarNoteError = "未解析出语法注解，请稍后重试"
+            } else {
+                grammarNotes = notes
             }
         }
     }
