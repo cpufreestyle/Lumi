@@ -31,5 +31,37 @@
     "@xmldom/xmldom": "^0.8.15",
     "fast-uri": "^3.1.6",
     "js-yaml": "^4.3.2"
+  },
+  "build": {
+    "appId": "com.cpufreestyle.lumi",
+    "productName": "Lumi",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/win-*",
+      "!dist/builder-debug.yml",
+      "src/**/*",
+      "package.json",
+      "translate.env.example"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "artifactName": "${productName}-${version}-win-${arch}.${ext}"
   }
 }
