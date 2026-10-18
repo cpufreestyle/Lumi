@@ -17,6 +17,7 @@
     "jsonwebtoken": "^9.0.2"
   },
   "overrides": {
-    "qs": "^6.16.0"
+    "qs": "^6.16.0",
+    "proxy-addr": "^2.0.8"
   }
 }
