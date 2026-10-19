@@ -116,6 +116,7 @@ cd Lumi
 ./run.sh restart      # 结束旧实例后重新启动
 ./run.sh check        # 查询是否正在运行
 ./run.sh tcc          # 仅写入用户级 TCC 授权
+./run.sh install       # 把 .build/Lumi.app 同步到 /Applications（默认不同步）
 
 # 方式二：免费 Apple ID 签名
 cd Lumi

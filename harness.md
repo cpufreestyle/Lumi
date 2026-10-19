@@ -33,6 +33,29 @@ npm test
 - 语法注解按钮：Premium 未解锁不显示；解锁后未播放时点击无反应；播放中点击应在 2-20 秒内
   显示 1-3 条小卡（失败给行内错误提示，不阻塞歌词主流程）
 
+## 打包与安装（macOS）
+
+```bash
+cd Lumi
+./run.sh install     # 显式把 .build/Lumi.app 同步到 /Applications（默认不同步）
+```
+
+`/Applications/Lumi.app` 已于 2026-10-19 按用户要求删除；实际运行的永远是
+`.build/Lumi.app`，桌面启动器（`~/Desktop/Lumi.app`，由 `tools/make_desktop_shortcut.sh`
+生成）自带 `.build` 回退，删安装位不影响任何启动路径。为什么需要同步、为什么默认
+不同步，完整理由见 `Lumi/run.sh` 内 `install_to_applications()` 注释（TCC csreq 按
+cdhash 钉死那一段），不要凭直觉加回去。
+
+## Windows 交叉打包（无需 Wine）
+
+```bash
+cd windows
+npm run build:win    # 产物 windows/release/Lumi-0.1.0-win-arm64.exe（当前只出 arm64）
+```
+
+只验证「产物完整」（asar 内容 / PE 头 / 大小），不验证「装上去能否启动」——
+后者缺 Windows on Arm 实机。当前未接 CI。
+
 ## 已知测试盲区
 
 - AppKit/SwiftUI 层（IslandWindowController / 桌面浮窗的行为）由「实机行为级自检」覆盖；
