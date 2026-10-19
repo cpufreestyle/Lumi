@@ -106,10 +106,13 @@ final class PluginDiscovery: ObservableObject {
         self.plugins = found
 
         // 诊断：打印扫描到的插件（临时，便于排查标签栏不显示插件的问题）
-        NSLog("[Lumi][PluginDiscovery] 扫描到 \(found.count) 个插件：\(found.map { $0.id + (($0.panel) ? "(panel)" : "") }.joined(separator: ", "))")
+        PluginLog.info("扫描完成 发现 " + String(found.count) + " 个插件："
+            + found.map { $0.id + (($0.panel) ? "(panel)" : "") }.joined(separator: ", ")
+            + " 扫描目录=" + scanDirs.joined(separator: " | "))
 
         // L3：把带 panel 标志的插件交给 PluginPanelBridge 轮询其面板数据
         let panelIDs = found.filter { $0.panel }.map { $0.id }
+        if !panelIDs.isEmpty { PluginLog.info("注册面板监听 " + String(panelIDs.count) + " 个") }
         PluginPanelBridge.shared.watch(panelIDs)
     }
 

@@ -143,6 +143,7 @@ final class PluginPanelBridge: ObservableObject {
         try? FileManager.default.createDirectory(at: Self.panelsDir,
                                                  withIntermediateDirectories: true)
         refreshAll()
+        if !ids.isEmpty { PluginLog.info("开始监听 " + String(ids.count) + " 个面板文件") }
         startWatching()
         startPollingIfNeeded()
     }
@@ -170,18 +171,20 @@ final class PluginPanelBridge: ObservableObject {
 
     /// 手动读一次某个插件的面板文件（供首个版本未轮询时立即生效）
     func refresh(_ id: String) {
-        entries[id] = Self.entry(from: Self.readPanelFile(id))
+        entries[id] = Self.entry(id: id, from: Self.readPanelFile(id))
     }
 
     /// 把读取结果转成 UI 条目。数据存在但陈旧时保留数据并标记 stale，
     /// 让 UI 可以继续渲染最后一帧内容，同时给出「可能已退出」的提示。
-    nonisolated private static func entry(from result: PanelReadResult) -> PluginPanelEntry {
+    nonisolated private static func entry(id: String, from result: PanelReadResult) -> PluginPanelEntry {
         switch result {
         case .ok(let p):
-            return PluginPanelEntry(data: p, status: p.isStale ? .stale : .live)
+        if p.isStale { PluginLog.warn("面板数据陈旧 id=" + id) }
+        return PluginPanelEntry(data: p, status: p.isStale ? .stale : .live)
         case .missing:
             return .empty
         case .malformed(let reason):
+            PluginLog.error("面板数据解码失败 id=" + id + " " + reason)
             return PluginPanelEntry(data: nil, status: .malformed(reason))
         }
     }
@@ -230,7 +233,11 @@ final class PluginPanelBridge: ObservableObject {
     private func attachDirectoryWatcher() {
         try? FileManager.default.createDirectory(at: Self.panelsDir, withIntermediateDirectories: true)
         let fd = open(Self.panelsDir.path, O_EVTONLY)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            // 插件还没写过文件：等目录监听在文件创建时触发重新挂载。
+            // 这里不记日志——启动时多数插件尚未写入，会刷一屏噪音。
+            return
+        }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: pluginWatchQueue)
         source.setEventHandler { [weak self] in
@@ -289,7 +296,7 @@ final class PluginPanelBridge: ObservableObject {
         guard !watchedIDs.isEmpty else { return }
         let ids = Array(watchedIDs)
         pollQueue.async { [weak self] in
-            let results = ids.map { (id: $0, entry: Self.entry(from: Self.readPanelFile($0))) }
+            let results = ids.map { (id: $0, entry: Self.entry(id: $0, from: Self.readPanelFile($0))) }
             Task { @MainActor in
                 guard let self = self else { return }
                 for r in results where self.entries[r.id] != r.entry {

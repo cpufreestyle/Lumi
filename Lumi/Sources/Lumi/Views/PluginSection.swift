@@ -43,6 +43,23 @@ struct PluginSection: View {
             .padding(.horizontal, 14)
             .padding(.top, 6)
 
+            // 诊断入口：用户反馈「插件不出现/按钮没反应」时，一行就能拿到日志路径。
+            // 放在这里而不是设置深处，是因为排障时用户正盯着这个面板。
+            HStack(spacing: 4) {
+                Button {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: PluginLog.path))
+                } label: {
+                    Label("诊断日志", systemImage: "doc.text.magnifyingglass")
+                        .font(.system(size: 9))
+                        .foregroundColor(PanelInk.text(0.45))
+                }
+                .buttonStyle(.plain)
+                .help(PluginLog.path)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 2)
+
             switch tab {
             case .installed:
                 installedList
