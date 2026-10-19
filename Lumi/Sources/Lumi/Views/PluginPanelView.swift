@@ -8,6 +8,7 @@ import AppKit
 struct PluginPanelView: View {
     let panel: PluginPanelData
     @ObservedObject private var plugins = PluginDiscovery.shared
+    @ObservedObject private var bridge = PluginPanelBridge.shared
     @ObservedObject private var state = AppState.shared
 
     var body: some View {
@@ -94,12 +95,24 @@ struct PluginPanelView: View {
                     .padding(.bottom, 8)
             }
 
-            if panel.isStale {
-                Text("插件数据已 30 秒未更新，可能已退出")
+            switch bridge.entries[panel.id]?.status ?? .live {
+            case .live:
+                EmptyView()
+            case .stale:
+                Label("插件数据已 30 秒未更新，可能已退出", systemImage: "clock.badge.exclamationmark")
                     .font(.system(size: 9))
-                    .foregroundColor(.orange.opacity(0.7))
+                    .foregroundColor(.orange.opacity(0.75))
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
+            case .malformed(let reason):
+                Label(reason, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(.red.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            case .noData:
+                EmptyView()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -117,7 +130,10 @@ struct PluginPanelView: View {
             HStack {
                 Text(line.key ?? "").font(.system(size: 12)).foregroundColor(PanelInk.text(0.5))
                 Spacer()
-                .foregroundColor(PanelInk.primary)
+                Text(line.value ?? "")
+                    .font(.system(size: 12))
+                    .foregroundColor(PanelInk.primary)
+                    .multilineTextAlignment(.trailing)
             }
         case .progress:
             ProgressView(value: min(1, max(0, line.p ?? 0)))

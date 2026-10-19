@@ -106,7 +106,7 @@ Lumi 每 **1 秒**轮询 `~/Library/Application Support/Lumi/PluginPanels/`，�
 ```
 
 - `id`：与 manifest 一致，同时用作文件名去重键。
-- `updatedAt`：Unix 秒。**超过 30 秒未更新，Lumi 会提示「插件可能已退出」**，务必周期性重写（含最新时间戳）。
+- `updatedAt`：Unix 秒。**超过 30 秒未更新，Lumi 会标记该插件为「stale」**并提示「插件可能已退出」，务必周期性重写（含最新时间戳）。
 - `lines` 支持四种 `kind`：
   - `text`：纯文本行（`value`）
   - `kv`：键值对（`key` + `value`）
@@ -184,11 +184,29 @@ bash Lumi/demo_panel.sh stop     # 停止并清理面板 JSON
 
 ---
 
+## 6.1 面板健康状态（宿主侧诊断）
+
+Lumi 会持续跟踪每个面板型插件的状态，并在「已安装」列表行尾用徽标显示，
+点开面板也能在底部看到对应提示：
+
+| 状态 | 列表徽标 | 含义 | 你该做什么 |
+| --- | --- | --- | --- |
+| live | 绿色实心圆点 | 面板数据正常且未陈旧 | 无需处理 |
+| stale | 橙色时钟感叹号 | 数据超过 30 秒未更新 | 恢复周期性写入；若插件已退出则属预期 |
+| malformed | 红色警告三角 | 面板文件存在但 JSON 解码失败 | 检查写入的 JSON 是否符合 `PluginPanelData` 结构 |
+| noData | 灰色虚线圆 | manifest 声明了 `panel: true` 但从未写出文件 | 开始写 `PluginPanels/<id>.json` |
+
+malformed 是本次新增的隔离：过去单个插件写坏 JSON 会让面板静默消失，
+用户会误以为是 Lumi 的问题。现在宿主保留该插件的其它功能（点击唤起等），
+只把它的面板标记为异常并说明原因。
+
 ## 7. 常见问题
 
 - **每个插件都要写版本号吗？** 强烈建议。在 `lumi-plugin.json` 里声明 `version`（如 `"1.0.0"`），Lumi 会在「已安装」列表显示 `v版本号`，市场也会据此判断「可更新」。没写版本号的插件在列表里只显示名称，且无法被更新检测识别。
 - **面板不出现？** 确认 manifest 里 `panel` 为 `true` 且 `id` 与 JSON 文件名一致；重启 Lumi 让它重新扫描。
 - **面板显示「可能已退出」？** 你的进程停止写 JSON 超过 30 秒了，恢复写入即可。
+- **面板显示「JSON 解码失败」？** 你写出的文件不符合 `PluginPanelData` 结构，
+  先用 `bash Lumi/demo_panel.sh once` 生成一份正确样例对照。
 - **图标是灰色拼图？** `iconName` 填的不是有效 SF Symbol 名，回退到了默认图标。
 - **不想被自动发现？** 不写 `lumi-plugin.json` 即可；仅通过市场源分发则只在用户安装后出现。
 

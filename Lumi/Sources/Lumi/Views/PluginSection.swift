@@ -7,7 +7,11 @@ import AppKit
 /// - 市场：从官方源拉取可安装插件，一键下载安装 / 卸载。
 struct PluginSection: View {
     @ObservedObject private var plugins = PluginDiscovery.shared
+    @ObservedObject private var bridge = PluginPanelBridge.shared
     @ObservedObject private var market = PluginMarketplace.shared
+    /// 待确认卸载的插件 id：卸载是破坏性操作（直接删 .app），
+    /// 误点一次就丢数据，所以点「卸载」后要求二次确认。
+    @State private var pendingUninstall: PluginManifest?
     @State private var tab: Tab = .installed
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -138,6 +142,7 @@ struct PluginSection: View {
                     }
                 }
                 Spacer(minLength: 4)
+                healthBadge(plugin)
                 Image(systemName: "arrow.up.right.square")
                     .font(.system(size: 12))
                     .foregroundColor(PanelInk.text(0.35))
@@ -149,6 +154,36 @@ struct PluginSection: View {
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 10).fill(PanelInk.chip(0.04)))
         .padding(.horizontal, 10)
+    }
+
+    /// 面板型插件的健康徽标：让用户在列表层就看得出哪个插件异常，
+    /// 不必逐个点开面板才发现「数据 30 秒没更新」或「写了坏 JSON」。
+    @ViewBuilder
+    private func healthBadge(_ plugin: PluginManifest) -> some View {
+        // 只有声明了 panel 的插件才有桥接状态；L1 插件不显示徽标
+        if plugin.panel, let status = bridge.entries[plugin.id]?.status {
+            switch status {
+        case .live:
+            Image(systemName: "circle.fill")
+                .font(.system(size: 6))
+                .foregroundColor(PanelInk.green)
+        case .stale:
+            Image(systemName: "clock.badge.exclamationmark")
+                .font(.system(size: 11))
+                .foregroundColor(.orange.opacity(0.85))
+                .help("面板数据 30 秒未更新，插件可能已退出")
+        case .malformed(let reason):
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundColor(.red.opacity(0.85))
+                .help(reason)
+        case .noData:
+            Image(systemName: "circle.dashed")
+                .font(.system(size: 11))
+                .foregroundColor(PanelInk.text(0.3))
+                .help("已声明面板但未写入数据")
+            }
+        }
     }
 
     // MARK: - 行：市场（安装/卸载）
@@ -182,14 +217,31 @@ struct PluginSection: View {
     private func installButton(_ plugin: PluginManifest) -> some View {
         let state = market.installState[plugin.id] ?? .none
         if market.isInstalled(plugin) {
-            Button("卸载") {
-                market.uninstall(plugin)
+            if pendingUninstall?.id == plugin.id {
+                HStack(spacing: 4) {
+                    Button("确认") {
+                        market.uninstall(plugin)
+                        pendingUninstall = nil
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.red.opacity(0.85)))
+                    Button("取消") { pendingUninstall = nil }
+                        .font(.system(size: 10))
+                        .foregroundColor(PanelInk.text(0.6))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                }
+            } else {
+                Button("卸载") { pendingUninstall = plugin }
+                    .font(.system(size: 10))
+                    .foregroundColor(PanelInk.text(0.6))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(PanelInk.chip(0.08)))
             }
-            .font(.system(size: 10))
-            .foregroundColor(PanelInk.text(0.6))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(PanelInk.chip(0.08)))
         } else {
             switch state {
             case .none:

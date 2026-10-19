@@ -72,6 +72,28 @@ struct PluginPanelData: Codable, Identifiable, Hashable {
     }
 }
 
+/// 单个插件面板的运行状态（供 UI 展示与诊断）。
+enum PluginPanelStatus: Equatable {
+    /// 正常：已读到面板数据且未陈旧
+    case live
+    /// 数据陈旧：超过 30 秒未更新，插件可能已退出
+    case stale
+    /// 无数据：manifest 声明了 panel，但从未写出过面板文件
+    case noData
+    /// 读取失败：文件存在但解码失败（插件写畸形 JSON）
+    case malformed(String)
+
+    var isUsable: Bool { self == .live }
+}
+
+/// 单个插件的面板状态快照（数据 + 状态）。
+struct PluginPanelEntry: Equatable {
+    var data: PluginPanelData?
+    var status: PluginPanelStatus
+
+    static let empty = PluginPanelEntry(data: nil, status: .noData)
+}
+
 // MARK: - 桥接管理
 
 @MainActor
@@ -79,7 +101,17 @@ final class PluginPanelBridge: ObservableObject {
     static let shared = PluginPanelBridge()
 
     /// 已加载的插件面板数据，key = plugin id
-    @Published private(set) var panels: [String: PluginPanelData] = [:]
+    @Published private(set) var entries: [String: PluginPanelEntry] = [:]
+
+    /// 兼容读取：仅返回有可用数据的插件面板（供 UI 直接渲染）
+    var panels: [String: PluginPanelData] {
+        entries.compactMapValues { $0.data }
+    }
+
+    /// 诊断计数：有多少插件当前处于非 live 状态（供市场页展示）
+    var unhealthyCount: Int {
+        entries.values.filter { !$0.status.isUsable }.count
+    }
 
     /// 共享目录（宿主管理，插件可写）
     nonisolated static let panelsDir: URL = {
@@ -115,24 +147,42 @@ final class PluginPanelBridge: ObservableObject {
         startPollingIfNeeded()
     }
 
-    /// 后台读取并解码单个面板文件（纯函数，可在任意队列调用）。
-    /// 文件缺失/无法解码返回 nil（调用方据此移除对应面板条目）。
-    nonisolated private static func readPanelFile(_ id: String) -> PluginPanelData? {
+    /// 面板读取结果：区分「读到数据 / 文件不存在 / 文件存在但解码失败」。
+    /// 返回失败原因而非简单 nil，UI 才能告诉用户「插件写了坏数据」，
+    /// 而不是让面板静默消失、让人以为是 Lumi 的 bug。
+    nonisolated private enum PanelReadResult {
+        case ok(PluginPanelData)
+        case missing
+        case malformed(String)
+    }
+
+    nonisolated private static func readPanelFile(_ id: String) -> PanelReadResult {
         let url = panelsDir.appendingPathComponent("\(id).json")
-        guard let data = try? Data(contentsOf: url),
-              var p = try? JSONDecoder().decode(PluginPanelData.self, from: data) else { return nil }
+        guard let data = try? Data(contentsOf: url) else { return .missing }
+        guard var p = try? JSONDecoder().decode(PluginPanelData.self, from: data) else {
+            return .malformed("面板 JSON 解码失败（格式不符）")
+        }
         // 文件名即 id，补强一致性
         if p.id != id { p = PluginPanelData(id: id, title: p.title, iconName: p.iconName,
                                             subtitle: p.subtitle, lines: p.lines, updatedAt: p.updatedAt) }
-        return p
+        return .ok(p)
     }
 
     /// 手动读一次某个插件的面板文件（供首个版本未轮询时立即生效）
     func refresh(_ id: String) {
-        if let p = Self.readPanelFile(id) {
-            panels[id] = p
-        } else {
-            panels.removeValue(forKey: id)
+        entries[id] = Self.entry(from: Self.readPanelFile(id))
+    }
+
+    /// 把读取结果转成 UI 条目。数据存在但陈旧时保留数据并标记 stale，
+    /// 让 UI 可以继续渲染最后一帧内容，同时给出「可能已退出」的提示。
+    nonisolated private static func entry(from result: PanelReadResult) -> PluginPanelEntry {
+        switch result {
+        case .ok(let p):
+            return PluginPanelEntry(data: p, status: p.isStale ? .stale : .live)
+        case .missing:
+            return .empty
+        case .malformed(let reason):
+            return PluginPanelEntry(data: nil, status: .malformed(reason))
         }
     }
 
@@ -211,16 +261,27 @@ final class PluginPanelBridge: ObservableObject {
     /// 文件事件到达：防抖 0.3s 后读取一次，并重新挂载监听。
     /// 重新挂载是必需的——第三方普遍用 `.atomic` 写入（临时文件 rename 覆盖原文件），
     /// 会让手里的 fd 指向已被替换的旧 inode，此后不再收到任何事件。
+    ///
+    /// 只重挂「事件涉及的那个文件」而不是全部 source：cancel 掉全部再重开，
+    /// 在插件高频连续写入时会反复关闭/打开同一批 fd，既浪费又可能丢事件。
     private func handleFileSystemEvent() {
         debounceItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 self?.pollOnce()
-                self?.startWatching()
+                self?.remountWatchers()
             }
         }
         debounceItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
+    /// 重挂所有监听源。与 startWatching 的区别是不重建目录监听（目录本身没被替换），
+    /// 只重建各插件文件的监听（它们的 inode 可能已被 atomic rename 换掉）。
+    private func remountWatchers() {
+        for (_, source) in fileSources { source.cancel() }
+        fileSources.removeAll()
+        for id in watchedIDs { attachFileWatcher(for: id) }
     }
 
     /// 读一轮面板文件：后台队列解码，主线程仅在数据变化时写回。
@@ -228,15 +289,11 @@ final class PluginPanelBridge: ObservableObject {
         guard !watchedIDs.isEmpty else { return }
         let ids = Array(watchedIDs)
         pollQueue.async { [weak self] in
-            let results = ids.map { (id: $0, panel: Self.readPanelFile($0)) }
+            let results = ids.map { (id: $0, entry: Self.entry(from: Self.readPanelFile($0))) }
             Task { @MainActor in
                 guard let self = self else { return }
-                for r in results {
-                    if let p = r.panel {
-                        if self.panels[r.id] != p { self.panels[r.id] = p }
-                    } else if self.panels[r.id] != nil {
-                        self.panels[r.id] = nil
-                    }
+                for r in results where self.entries[r.id] != r.entry {
+                    self.entries[r.id] = r.entry
                 }
             }
         }

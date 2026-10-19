@@ -35,8 +35,47 @@ final class PluginDiscovery: ObservableObject {
         //               iconName: "menubar.dock.rectangle", urlScheme: "bartender", appName: "Bartender.app"),
     ]
 
-    /// 执行一次扫描
+    /// 上一次扫描的目录签名（各目录的 mtime + .app 条目数），用于跳过无变化的重复扫描。
+    /// 装/卸插件会触发 refreshInstalled → scan，若每次都全量读 manifest，
+    /// 在 /Applications 有上百个 app 的机器上会明显卡顿灵动岛 UI。
+    /// 目录签名：mtime 与条目数分别存，不做任何压缩。
+    /// 早先的实现把两者位运算压成一个 Int，同一秒内增删各一个 app 会撞签名，
+    /// 虽然实际概率极低，但没必要为省一个结构体引入这种边界。
+    private struct DirSignature: Equatable {
+        let mtime: TimeInterval
+        let count: Int
+    }
+
+    private var lastSignature: [String: DirSignature] = [:]
+
+    /// 计算当前扫描目录的签名（目录 mtime 与条目数，足够便宜且能覆盖增删）。
+    private func directorySignature() -> [String: DirSignature] {
+        var sig: [String: DirSignature] = [:]
+        let fm = FileManager.default
+        for dir in scanDirs {
+            let attrs = try? fm.attributesOfItem(atPath: dir)
+            let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let count = (try? fm.contentsOfDirectory(atPath: dir))?.count ?? 0
+            sig[dir] = DirSignature(mtime: mtime, count: count)
+        }
+        return sig
+    }
+
+    /// 执行一次扫描。目录签名未变化时直接返回，不重复读盘。
     func scan() {
+        let sig = directorySignature()
+        if sig == lastSignature, !plugins.isEmpty { return }
+        lastSignature = sig
+        scanAll()
+    }
+
+    /// 强制全量扫描（跳过签名缓存），供用户手动刷新使用。
+    func rescan() {
+        lastSignature = [:]
+        scanAll()
+    }
+
+    private func scanAll() {
         var found: [PluginManifest] = []
         var seen = Set<String>()
 
