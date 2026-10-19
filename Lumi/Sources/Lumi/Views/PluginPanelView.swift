@@ -141,9 +141,7 @@ struct PluginPanelView: View {
                 .frame(height: 4)
         case .button:
             Button(action: {
-                guard let scheme = pluginScheme, !scheme.isEmpty,
-                      let t = line.title,
-                      let url = URL(string: "\(scheme)://action?name=\(t.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") else { return }
+                guard let url = Self.actionURL(scheme: pluginScheme, title: line.title) else { return }
                 NSWorkspace.shared.open(url)
             }) {
                 Text(line.title ?? "")
@@ -165,5 +163,20 @@ struct PluginPanelView: View {
     /// 插件声明的权限列表（用于在分页头部显示橙色手形徽标）
     private var pluginPermissions: [PluginPermission]? {
         plugins.plugins.first(where: { $0.id == panel.id })?.permissions
+    }
+
+    /// 构造面板按钮的回调 URL：`<scheme>://action?name=<标题>`。
+    ///
+    /// 必须用 URLComponents 拼而不能手工字符串插值：按钮标题里出现 `&` 时，
+    /// `.urlQueryAllowed` 不编码它，插值出来的 URL 会被 `&` 截断，
+    /// 插件侧 queryItems 只拿到前半段（`A&B` 变成 `A`），且不报错、只是内容错了。
+    /// URLComponents 会按规范编码分隔符，解析端才能拿到完整标题。
+    static func actionURL(scheme: String?, title: String?) -> URL? {
+        guard let scheme = scheme, !scheme.isEmpty, let title = title else { return nil }
+        var comp = URLComponents()
+        comp.scheme = scheme
+        comp.host = "action"
+        comp.queryItems = [URLQueryItem(name: "name", value: title)]
+        return comp.url
     }
 }

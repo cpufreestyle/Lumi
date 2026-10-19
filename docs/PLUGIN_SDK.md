@@ -123,6 +123,9 @@ myweather://action?name=<按钮标题>
 
 你的 app 实现 URL Scheme 处理（macOS `NSAppleEventManager` / SwiftUI `.onOpenURL`）即可响应。
 
+解析时用 `URLComponents.queryItems` 取 `name`，不要自己切字符串：按钮标题可能含
+`&`、`?`、`#`、`%` 等字符，宿主已按规范编码，只有 `queryItems` 能拿到完整原文。
+
 ### 写文件最佳实践
 
 - 用 `atomic` 写法（先写临时文件再 rename），避免 Lumi 读到半截 JSON。
