@@ -131,6 +131,17 @@ myweather://action?name=<按钮标题>
 
 ---
 
+## 3.1 卸载行为（宿主权限边界）
+
+卸载只能删掉 **Lumi 通过市场装进 `~/Library/Application Support/Lumi/Plugins/` 的副本**。
+
+如果你是把 `.app` 手动丢进 `/Applications` 或 `~/Applications` 被发现的，
+Lumi 不会删它——那是你自己的文件，宿主无权处理。此时点「卸载」会看到
+类似「该插件位于 /Applications/Foo.app，非 Lumi 安装目录，请手动删除」的提示。
+
+判断依据是发现插件时记录的 `bundlePath` 是否位于 `Plugins/` **之下**
+（按路径分量比较，不是字符串前缀，`Plugins-evil/` 这类近似路径会被正确拒绝）。
+
 ## 4. 本地发现目录
 
 Lumi 启动时扫描以下位置，读取每个 `.app` 内的 `lumi-plugin.json`：

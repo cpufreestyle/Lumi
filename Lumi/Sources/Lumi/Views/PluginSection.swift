@@ -265,10 +265,13 @@ struct PluginSection: View {
                     .foregroundColor(PanelInk.green)
                     .font(.system(size: 13))
             case .failed(let msg):
+                // 不设 lineLimit：卸载被拒绝时要给出完整路径，
+                // 截断成一行会让用户不知道该手动删哪个文件。
                 Text(msg)
                     .font(.system(size: 9))
                     .foregroundColor(.orange.opacity(0.85))
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 180, alignment: .trailing)
             }
         }
     }

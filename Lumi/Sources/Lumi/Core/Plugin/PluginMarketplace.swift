@@ -66,7 +66,11 @@ final class PluginMarketplace: NSObject, ObservableObject {
     private var progressObservers:
         [URLSessionDownloadTask: String] = [:]   // task -> plugin id
 
-    private let pluginsDir: URL = {
+    private let pluginsDir: URL = PluginMarketplace.pluginsDirURL
+
+    /// 插件安装目录。nonisolated static 以便 uninstallTarget 在非隔离上下文调用，
+    /// 避免为读一个目录路径把整条卸载路径拖回主线程。
+    nonisolated static let pluginsDirURL: URL = {
         let base = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory,
                                                        .userDomainMask, true).first
                    ?? NSHomeDirectory() + "/Library/Application Support"
@@ -251,30 +255,56 @@ final class PluginMarketplace: NSObject, ObservableObject {
         task.resume()
     }
 
-    /// 卸载已安装插件（按 id 在 Plugins 目录定位并删除 .app）
+    /// 卸载插件：按发现时记录的 bundlePath 直接定位删除。
+    ///
+    /// 只删 Lumi 自己装进 Plugins/ 的副本。/Applications 里的同名 app 是用户
+    /// 自己放的，宿主无权删除——这类插件卸载时明确拒绝并说明原因，
+    /// 而不是像早先那样扫一遍 Plugins/ 找不到就静默返回，
+    /// 让用户以为点过却没反应是界面 bug。
     func uninstall(_ plugin: PluginManifest) {
-        let fm = FileManager.default
-        // 按 bundle id 或 appName 匹配
-        let candidates = (try? fm.contentsOfDirectory(at: pluginsDir,
-                includingPropertiesForKeys: nil)) ?? []
-        for appURL in candidates where appURL.pathExtension == "app" {
-            let info = appURL.appendingPathComponent("Contents/Info.plist")
-            if let dict = NSDictionary(contentsOf: info),
-               let bid = dict["CFBundleIdentifier"] as? String,
-               bid == plugin.id {
-                try? fm.removeItem(at: appURL)
-                installState[plugin.id] = InstallState.none
-                refreshInstalled()
-                return
-            }
-            if let name = plugin.appName, appURL.lastPathComponent == name {
-                try? fm.removeItem(at: appURL)
-                installState[plugin.id] = InstallState.none
-                refreshInstalled()
-                return
-            }
+        guard let appURL = Self.uninstallTarget(for: plugin) else {
+            installState[plugin.id] = .failed(uninstallRefusalReason(plugin))
+            return
+        }
+        do {
+            try FileManager.default.removeItem(at: appURL)
+            installState[plugin.id] = InstallState.none
+            refreshInstalled()
+        } catch {
+            installState[plugin.id] = .failed(NetworkErrorText.describe(error))
         }
     }
+
+    /// 定位可删除的 .app：必须是 Lumi 安装目录下的副本。
+    /// bundlePath 缺失时按 appName 在 Plugins/ 内回退匹配。
+    nonisolated static func uninstallTarget(for plugin: PluginManifest) -> URL? {
+        let fm = FileManager.default
+        if let path = plugin.bundlePath, !path.isEmpty {
+            let url = URL(fileURLWithPath: path)
+            // 必须在安装目录「之下」，而不是字符串前缀命中：
+            // /Lumi/Plugins-evil/Foo.app 也以 /Lumi/Plugins 开头，
+            // 直接 hasPrefix 会把它误判成合法目标而删掉用户的东西。
+            let dir = pluginsDirURL.resolvingSymlinksInPath().path
+            let resolved = url.resolvingSymlinksInPath().path
+            let isInside = resolved == dir
+                || resolved.hasPrefix(dir.hasSuffix("/") ? dir : dir + "/")
+            return isInside ? url : nil
+        }
+        // 回退：按 appName 在 Plugins/ 内找（旧版本发现的插件可能没记 bundlePath）
+        guard let name = plugin.appName, !name.isEmpty else { return nil }
+        return try? fm.contentsOfDirectory(at: pluginsDirURL,
+                                           includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent == name }
+    }
+
+    /// 卸载被拒绝时给用户的解释。
+    private func uninstallRefusalReason(_ plugin: PluginManifest) -> String {
+        if let path = plugin.bundlePath, !path.isEmpty {
+            return "该插件位于 " + path + "，非 Lumi 安装目录，请手动删除"
+        }
+        return "未找到可卸载的插件副本"
+    }
+
 
     // MARK: - 内部：完成下载后处理
 
