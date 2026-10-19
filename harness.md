@@ -50,11 +50,18 @@ cdhash 钉死那一段），不要凭直觉加回去。
 
 ```bash
 cd windows
-npm run build:win    # 产物 windows/release/Lumi-0.1.0-win-arm64.exe（当前只出 arm64）
+npm run build:win    # 同时出 x64 与 arm64：Lumi-0.1.0-win-x64.exe / -win-arm64.exe / -win.exe
 ```
 
-只验证「产物完整」（asar 内容 / PE 头 / 大小），不验证「装上去能否启动」——
-后者缺 Windows on Arm 实机。当前未接 CI。
+验证分两层：
+
+- **x64 已用 Wine 实跑**（`WINEPREFIX=~/.wine wine Lumi.exe`）：主进程、GPU 进程、
+  renderer 全部初始化，renderer 路径 bug 已修。证据见
+  `docs/handoff-品牌安装位与Windows构建-2026-10-19.md` 文末附录。
+- **arm64 只验证产物完整**（asar 内容 / PE 头 / 大小）：本机 Wine 是 Intel 二进制跑
+  Rosetta，跑不了 PE32+ Aarch64（`ShellExecuteEx failed: Bad format.`），需真机。
+
+完整 UI 交互与 NSIS 安装流程两个架构都未验证。当前未接 CI。
 
 ## 已知测试盲区
 

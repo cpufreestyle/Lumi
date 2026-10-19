@@ -33,7 +33,7 @@ function createOverlayWindow() {
   if (isDev) {
     overlayWin.loadURL("http://localhost:5173");
   } else {
-    overlayWin.loadFile(path.join(__dirname, "../renderer/index.html"));
+    overlayWin.loadFile(path.join(__dirname, "renderer/index.html"));
   }
 
   // 桌面歌词悬浮窗:鼠标穿透(点击穿透到下方窗口),拖拽由渲染进程内部 handle 处理
