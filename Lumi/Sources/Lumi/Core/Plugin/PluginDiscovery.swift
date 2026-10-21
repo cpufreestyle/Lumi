@@ -125,26 +125,34 @@ final class PluginDiscovery: ObservableObject {
         return m
     }
 
-    /// 唤起插件（L1：URL Scheme；若 .app 存在可直接 open）
+    /// 唤起插件。返回 false 表示「没有任何可用入口」——scheme、bundlePath、appName 全缺。
+    ///
+    /// 注意：NSWorkspace.open 成功只说明请求已被系统接受，不代表目标 app 真的起来了
+    /// （scheme 未注册会返回 false；注册了 scheme 但 app 不在位这类情况仍可能返回 true）。
+    /// 所以这里只把「无入口可走」当失败，open 的结果仅记录到日志供排查。
     @discardableResult
     func launch(_ plugin: PluginManifest) -> Bool {
-        // 优先 URL Scheme
         if let scheme = plugin.urlScheme, !scheme.isEmpty,
-           let url = URL(string: "\(scheme)://") {
-            NSWorkspace.shared.open(url)
+           let url = URL(string: scheme + "://") {
+            let ok = NSWorkspace.shared.open(url)
+            PluginLog.info("唤起 " + plugin.id + " via scheme=" + scheme + ":// open()=" + String(ok))
+            if !ok { PluginLog.warn("open() 返回 false，scheme 可能未被注册：" + scheme) }
             return true
         }
-        // 回退：直接 open .app
         if let path = plugin.bundlePath, !path.isEmpty {
-            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            let ok = NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            PluginLog.info("唤起 " + plugin.id + " via bundlePath=" + path + " open()=" + String(ok))
             return true
         }
         if let app = plugin.appName, !app.isEmpty {
+            let target = "/Applications/" + app
             let cfg = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/Applications/\(app)"),
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: target),
                                               configuration: cfg) { _, _ in }
+            PluginLog.info("唤起 " + plugin.id + " via appName=" + target)
             return true
         }
+        PluginLog.warn("无法唤起 " + plugin.id + "：无 urlScheme / bundlePath / appName")
         return false
     }
 }
