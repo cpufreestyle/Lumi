@@ -63,6 +63,21 @@ npm run build:win    # 同时出 x64 与 arm64：Lumi-0.1.0-win-x64.exe / -win-a
 
 完整 UI 交互与 NSIS 安装流程两个架构都未验证。当前未接 CI。
 
+**校验 NSIS 安装包架构时不要读外层 PE 头。** 安装包外层是 NSIS 自带的引导 stub，
+它本身就是 32 位（`machine=0x14c i386`），与包内 payload 架构无关——三个包
+（`-win-x64` / `-win-arm64` / `-win`）读出来全都是 `i386`，这是标准行为，不是产物
+搞错。真正的应用架构只有两处可验：`release/win-unpacked/Lumi.exe` 与
+`release/win-arm64-unpacked/Lumi.exe` 的 PE 头（分别是 `x86_64` / `ARM64`），
+或构建日志里的 `archs=x64, arm64`。payload 是 LZMA 压缩的，在 exe 里扫不到 PE 头。
+
+判断是否真的出了某个架构的产物，看构建日志有没有 `packaging ... arch=<名字>` 与
+`building target=nsis ... archs=<列表>` 两行，比看文件名可靠。曾经把 `ia32`
+（32 位）误加进 `arch` 数组，产物、`APP_32` define、日志行全都正常出现，
+只有逐行读日志才发现它确实参与了构建。
+
+另外：`release/` 里同名 exe 的大小会差几个字节（NSIS 有时间戳字段），
+不要用大小精确比对来判断构建是否变化。
+
 应用图标已补齐：`windows/build-resources/icon.ico` 由
 `Lumi/Resources/AppIcon.assets/AppIcon_1024.png` 缩放生成（16/24/32/48/64/128/256
 七档，32bpp，与 macOS 端同源），已确认嵌入 `Lumi.exe` 与三个 NSIS 安装包的资源段
