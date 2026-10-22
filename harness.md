@@ -11,7 +11,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 cd Lumi
 swift build --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 swift test  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
-# 期望：Build complete（0 warning / 0 error）；586 tests / 0 failures
+# 期望：Build complete（0 warning / 0 error）；621 tests / 0 failures
 
 # 2. Node 后端
 cd ..
@@ -62,6 +62,12 @@ npm run build:win    # 同时出 x64 与 arm64：Lumi-0.1.0-win-x64.exe / -win-a
   Rosetta，跑不了 PE32+ Aarch64（`ShellExecuteEx failed: Bad format.`），需真机。
 
 完整 UI 交互与 NSIS 安装流程两个架构都未验证。当前未接 CI。
+
+应用图标已补齐：`windows/build-resources/icon.ico` 由
+`Lumi/Resources/AppIcon.assets/AppIcon_1024.png` 缩放生成（16/24/32/48/64/128/256
+七档，32bpp，与 macOS 端同源），已确认嵌入 `Lumi.exe` 与三个 NSIS 安装包的资源段
+（2026-10-22 逐字节比对 ICO 内嵌 PNG 验证）。换图标时改 `Lumi/tools/make_icon.swift`
+后重跑 `Lumi/tools/make_app_icon.sh`，再重新生成 ico。
 
 ## 已知测试盲区
 

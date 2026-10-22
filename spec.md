@@ -67,4 +67,4 @@
 - Swift：`cd Lumi && swift test --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`
 - Node：仓库根 `npm test`
 
-两套都绿才能视为契约保持。当前基线：Swift 586 passed / 0 failed；Node 41 pass / 0 fail。
+两套都绿才能视为契约保持。当前基线：Swift 621 passed / 0 failed；Node 41 pass / 0 fail。
