@@ -45,6 +45,9 @@ struct PluginSection: View {
 
             // 诊断入口：用户反馈「插件不出现/按钮没反应」时，一行就能拿到日志路径。
             // 放在这里而不是设置深处，是因为排障时用户正盯着这个面板。
+            //
+            // 入口本身常驻（9pt 低调文字），否则无异常时用户找不到它；
+            // 但只在真有插件面板异常时才额外显示告警，不打扰正常用户。
             HStack(spacing: 4) {
                 Button {
                     NSWorkspace.shared.open(URL(fileURLWithPath: PluginLog.path))
@@ -55,6 +58,12 @@ struct PluginSection: View {
                 }
                 .buttonStyle(.plain)
                 .help(PluginLog.path)
+                if let summary = PluginPanelBridge.healthSummary(bridge.unhealthyCount) {
+                    Text(summary)
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange.opacity(0.85))
+                        .help("有插件面板数据异常（陈旧 / 未写入 / 格式错误），点「诊断日志」查看详情")
+                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 14)

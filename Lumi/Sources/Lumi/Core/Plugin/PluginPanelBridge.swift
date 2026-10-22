@@ -113,6 +113,20 @@ final class PluginPanelBridge: ObservableObject {
         entries.values.filter { !$0.status.isUsable }.count
     }
 
+    /// 面板异常摘要：把 `unhealthyCount` 变成用户看得懂的一句话。
+    /// 抽成静态纯函数是为了能单测——文案是排障入口的核心，不能只靠肉眼看。
+    nonisolated static func healthSummary(_ unhealthyCount: Int) -> String? {
+        switch unhealthyCount {
+        case ...0:
+            // 全 live：不显示任何提示，避免给正常用户制造焦虑
+            return nil
+        case 1:
+            return "1 个插件面板异常"
+        default:
+            return String(unhealthyCount) + " 个插件面板异常"
+        }
+    }
+
     /// 共享目录（宿主管理，插件可写）
     nonisolated static let panelsDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,

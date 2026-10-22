@@ -72,5 +72,31 @@ final class PluginPanelStatusTests: XCTestCase {
         ]
         XCTAssertEqual(dict.values.filter { !$0.status.isUsable }.count, 3)
     }
+
+    // MARK: - healthSummary 文案
+
+    func testHealthSummaryNilWhenAllLive() {
+        // 全 live 时不给提示：正常用户不该看到告警
+        XCTAssertNil(PluginPanelBridge.healthSummary(0))
+        // 负数同样视为「无异常」，防御桥接层计数被外部改坏
+        XCTAssertNil(PluginPanelBridge.healthSummary(-1))
+    }
+
+    func testHealthSummarySingularWording() {
+        // 中文单数必须单独一支，避免出现「1 个插件面板异常」这种别扭写法
+        XCTAssertEqual(PluginPanelBridge.healthSummary(1), "1 个插件面板异常")
+    }
+
+    func testHealthSummaryPluralWording() {
+        XCTAssertEqual(PluginPanelBridge.healthSummary(2), "2 个插件面板异常")
+        XCTAssertEqual(PluginPanelBridge.healthSummary(37), "37 个插件面板异常")
+    }
+
+    func testHealthSummaryNeverEmpty() {
+        // 计数为正就必须返回非空串，否则 UI 会渲染一个空 Text 占位
+        for n in 1...20 {
+            XCTAssertFalse(PluginPanelBridge.healthSummary(n)?.isEmpty ?? true, "n=\(n)")
+        }
+    }
 }
 
