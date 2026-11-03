@@ -71,11 +71,9 @@ Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 A
 | `Core/AppState.swift` | 防抖落盘；新增设置开关字段（避让 / 音量 HUD 等） |
 | `Views/IslandControls.swift` | 设置开关 UI |
 | `Views/IslandViews.swift` | 进度线、音量 HUD（CollapsedView） |
-| `Modules/Music/MusicController.swift` | 音量/歌词校准防抖 |
-| `Modules/Music/MusicTranslationService.swift` | 整首歌词合并写盘 |
-| `Modules/Music/MusicLyricsEngine.swift` | 歌词引擎微调 |
-| `Modules/Calendar/CalendarViews.swift` | EventKit 查询移主线程外 |
-| `Modules/Focus/FocusViews.swift` | 番茄钟计时基于结束时刻 |
+| `Modules/Music/Controllers/MusicController.swift` | 音量/歌词校准防抖、整首歌词合并写盘、歌词引擎微调 |
+| `Modules/Calendar/Controllers/CalendarController.swift` | EventKit 查询移主线程外 |
+| `Modules/Focus/Controllers/FocusController.swift` | 番茄钟计时基于结束时刻 |
 
 > 以上 10 个文件已随 `1ed0ae6` 提交。
 

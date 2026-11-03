@@ -32,7 +32,7 @@
    - 文件名非法字符（/\:?%*|"<>）替换为下划线，空标题兜底为 `Lumi-Lyrics`；
    - 渲染失败（ImageRenderer 不可用）返回 nil，调用方禁用按钮；
    - 分享用 NSSharingServicePicker（macOS 13+ 推荐路径），不用已 deprecated 的 `sharingServices(forItems:)`。
-   见 `Modules/Music/Models/LyricsShareCard.swift` 与 `Views/LyricsShareCardView.swift`。
+   见 `Modules/Music/Models/LyricsShareCard.swift` 与 `Modules/Music/Views/LyricsShareCardView.swift`。
 9. **逐行歌词语法注解**（复刻 Musixmatch 语言学习付费档，PremiumFeature `lyricsGrammar`）：
    - 仅 Premium 解锁后显示语法注解按钮；未解锁一律不显示；
    - 原文为空（未播放 / 纯音乐）时点击无反应；
