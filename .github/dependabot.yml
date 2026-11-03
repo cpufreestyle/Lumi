@@ -1,0 +1,53 @@
+version: 2
+
+# Security updates 是仓库级开关（已 enabled）。本文件只管 version updates：
+# • keep dependencies fresh → security update PRs 更容易合并（官方建议）
+# • 每周一次分组小版本更新，减少 PR 噪音；major 版本跳变被 ignore 掉（仅对 version updates）
+# • 不设 target-branch，让配置也管 security updates（默认行为；设了会解耦）
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "10:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    commit-message:
+      # 不加 include: "scope" —— 否则会产出 fix(deps)(deps) 重复前缀
+      prefix: "fix(deps)"
+      prefix-development: "fix(dev-deps)"
+    groups:
+      backend-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # update-types 只影响 version updates，不影响 security updates（GitHub 文档确认）
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "npm"
+    directory: "/windows"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "10:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "fix(dev-deps)"
+    groups:
+      windows-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
