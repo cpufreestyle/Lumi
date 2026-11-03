@@ -41,6 +41,16 @@
    - 解析失败时行内给错误提示，不阻塞歌词主流程；
    - 复用 AIAssist 的 HTTP 链路（Keychain API Key，用户自配端点）。
    见 `Modules/Music/Models/LyricsGrammarNote.swift` 与 AIAction 的 `grammar` 预设。
+10. **支付宝购买链路（后端已实现，休眠中）**：
+    - 默认无凭证时走内置 `/pay/sandbox/...` 模拟网关；配置 `ALIPAY_APP_ID` /
+      `ALIPAY_PRIVATE_KEY` 后同一 API 跳真实 page.pay；
+    - 回调必须通过 RSA2 验签或受 `LUMI_ALIPAY_SANDBOX_TOKEN` 保护的模拟回调；
+      金额、订单、设备绑定在发码前校验；只允许 `TRADE_SUCCESS`；
+    - 发码复用 `license-tool redeem --lifetime`，产出绑定设备的 `LUMI2-` 永久码；
+      未支付 / 非本设备查询不返回激活码；
+    - 客户端暂不接入：前端无购买入口，不发请求、不轮询；链路仅以后端端点存在，
+      待真实商户资质与公网回调地址就绪后再打开。
+    见 `server.js` 与 `test/server.test.js`。
 
 ## 外部依赖契约
 
@@ -59,6 +69,12 @@
 | `POST /api/setup` | 写入 MusicKit 凭据（校验 PEM） |
 | `POST /api/redeem` | 激活码换发 |
 | `GET /api/revocations` | 吊销清单 |
+| `POST /api/alipay/order` | 创建支付宝订单并返回支付页 URL |
+| `POST /api/alipay/notify` | 支付宝异步回调；验签/模拟 token 后签发激活码 |
+| `GET /api/alipay/query` | 按订单号 + 设备轮询支付与发码状态 |
+
+> 支付宝三个端点当前为「后端保留、客户端休眠」状态：App 无购买 UI，链路仅可经 curl /
+> 测试驱动；上线需补商户资质、公网 HTTPS notify 与订单持久化（见 HANDOFF 待办）。
 
 新增端点必须：1）在 `server.js` 实现；2）在 `test/server.test.js` 加测试；3）在本表登记，缺一不可。
 
@@ -67,4 +83,4 @@
 - Swift：`cd Lumi && swift test --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`
 - Node：仓库根 `npm test`
 
-两套都绿才能视为契约保持。当前基线：Swift 621 passed / 0 failed；Node 41 pass / 0 fail。
+两套都绿才能视为契约保持。当前基线：Swift 621 passed / 0 failed；Node 51 pass / 0 fail。

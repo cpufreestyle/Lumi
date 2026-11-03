@@ -89,6 +89,7 @@ Lumi 是 macOS 菜单栏「动态岛」App：常驻刘海区的胶囊，聚合 A
 | ⭐⭐⭐ | 蓝牙/AirPods 电量显示在胶囊 | 项目已 `import IOBluetooth` |
 | ⭐⭐ | 会议/直播检测联动 | `liveDetection` 已有 → 开会自动切模块 + 免打扰 |
 | ⭐⭐ | 设置里自定义键位 | 右键/中键/滚轮各选功能 |
+| ⭐⭐ | 支付宝真实网关上线 | 后端链路已通（模拟模式，`npm test` 覆盖），客户端入口已休眠；上线前补 `ALIPAY_APP_ID`、`ALIPAY_PRIVATE_KEY`、`ALIPAY_PUBLIC_KEY`、公网 `ALIPAY_NOTIFY_URL`/`ALIPAY_RETURN_URL`、订单持久化，并重新打开 App 侧购买 UI |
 | — | `PollingCoordinator` 每拍重复求值 `interval()` | **已评估，收益极小**（`isMusicRunning()` 有 1s 缓存），不建议做，避免调度语义风险 |
 | 收尾 | 提交 + 发版 | 见 §6 |
 

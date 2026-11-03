@@ -5,6 +5,7 @@
 
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -34,6 +35,11 @@ function loadConfig() {
     teamId: process.env.APPLE_TEAM_ID || '',
     keyId: process.env.APPLE_KEY_ID || '',
     privateKey: process.env.APPLE_PRIVATE_KEY || '',
+    alipayAppId: process.env.ALIPAY_APP_ID || '',
+    alipayPrivateKey: process.env.ALIPAY_PRIVATE_KEY || '',
+    alipayPublicKey: process.env.ALIPAY_PUBLIC_KEY || '',
+    alipayNotifyUrl: process.env.ALIPAY_NOTIFY_URL || '',
+    alipayReturnUrl: process.env.ALIPAY_RETURN_URL || '',
     port: parseInt(process.env.PORT || '3000'),
   };
 }
@@ -135,6 +141,124 @@ function escapeEnvValue(value) {
     return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
   }
   return value;
+}
+
+// ============ 支付宝（试运行链路） ============
+// 当前为「支付宝兼容 + 本地模拟支付」实现：无需凭证即可打通下单/回调/发码。
+// 配置 ALIPAY_APP_ID 与 ALIPAY_PRIVATE_KEY 后，同一 API 会切到真实 page.pay 跳转。
+// 正式上线前还需替换 notify_url 为公网 HTTPS 回调，并保存订单。
+
+const ALIPAY_PRODUCTS = {
+  lifetime: {
+    id: 'lifetime',
+    title: 'Lumi 永久许可',
+    subject: 'Lumi 永久许可',
+    amount: '68.00',
+    outTradeNoPrefix: 'LUMIALI-L',
+  },
+};
+
+const alipayOrders = new Map();
+
+function normalizeOutTradeNo(value) {
+  const text = String(value || '').trim();
+  return /^[\w.-]{1,64}$/.test(text) ? text : null;
+}
+
+function normalizeAlipayNotify(body) {
+  const normalized = {};
+  for (const [key, value] of Object.entries(body || {})) {
+    if (typeof value !== 'string') continue;
+    normalized[key] = value;
+  }
+  return normalized;
+}
+
+function buildAlipaySignatureBase(normalized) {
+  return Object.keys(normalized)
+    .filter((key) => key !== 'sign' && key !== 'sign_type' && normalized[key] !== '')
+    .sort()
+    .map((key) => `${key}=${normalized[key]}`)
+    .join('&');
+}
+
+async function verifyAlipaySignature(normalized) {
+  const sign = normalized.sign;
+  const publicKeyB64 = process.env.ALIPAY_PUBLIC_KEY || '';
+  if (!sign || !publicKeyB64) return false;
+  const pem = [
+    '-----BEGIN PUBLIC KEY-----',
+    ...publicKeyB64.replace(/\s+/g, '').replace(/(.{64})/g, '$1\n').split('\n').filter(Boolean),
+    '-----END PUBLIC KEY-----',
+  ].join('\n');
+  try {
+    const publicKey = await crypto.createPublicKey({ key: pem, format: 'pem' });
+    return crypto.verify('sha256', Buffer.from(buildAlipaySignatureBase(normalized)), {
+      key: publicKey,
+      padding: crypto.constants.RSA_PKCS1_PADDING,
+    }, Buffer.from(sign, 'base64'));
+  } catch {
+    return false;
+  }
+}
+
+function buildAlipayPaymentUrl(order) {
+  if (!config.alipayAppId || !config.alipayPrivateKey) {
+    return `/pay/sandbox/${encodeURIComponent(order.outTradeNo)}`;
+  }
+  const params = {
+    app_id: config.alipayAppId,
+    biz_content: JSON.stringify({
+      out_trade_no: order.outTradeNo,
+      product_code: 'FAST_INSTANT_TRADE_PAY',
+      total_amount: order.amount,
+      subject: order.subject,
+    }),
+    charset: 'utf-8',
+    method: 'alipay.trade.page.pay',
+    notify_url: config.alipayNotifyUrl,
+    return_url: config.alipayReturnUrl,
+    sign_type: 'RSA2',
+    timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    version: '1.0',
+  };
+  const signed = Object.keys(params)
+    .filter((key) => params[key] !== '' && params[key] !== undefined && params[key] !== null)
+    .sort()
+    .map((key) => `${key}=${encodeURIComponent(params[key])}`)
+    .join('&');
+  return `https://openapi.alipay.com/gateway.do?${signed}&sign=${encodeURIComponent(order.sandboxSign)}`;
+}
+
+function issuePaidLicense(order) {
+  return new Promise((resolve, reject) => {
+    const keyPath = path.join(__dirname, 'Lumi', 'secrets', 'license_private_key.b64');
+    let keyB64 = '';
+    try { keyB64 = fs.readFileSync(keyPath, 'utf-8').trim(); } catch (e) { /* ignore */ }
+    if (!keyB64) return reject(new Error('服务端未配置私钥，无法签发激活码'));
+
+    const env = {
+      ...process.env,
+      LUMI_LICENSE_PRIVATE_KEY: keyB64,
+      LUMI_REDEEM_OLD_KEY: order.outTradeNo,
+      LUMI_REDEEM_ORDER: order.outTradeNo,
+      LUMI_REDEEM_DEVICE: order.deviceId,
+      LUMI_REDEEM_NONCE: `PAY-${order.outTradeNo}-${order.deviceId.slice(0, 12)}`,
+    };
+    if (process.env.LUMI_DEVICE_LIMIT) env.LUMI_DEVICE_LIMIT = process.env.LUMI_DEVICE_LIMIT;
+    if (process.env.LUMI_VALID_ORDERS) env.LUMI_VALID_ORDERS = process.env.LUMI_VALID_ORDERS;
+
+    execFile('swift', ['run', 'license-tool', 'redeem', '--lifetime'], {
+      cwd: path.join(__dirname, 'Lumi'),
+      env,
+      timeout: 180000,
+    }, (err, stdout, stderr) => {
+      if (err) return reject(new Error((stderr || err.message || '签发失败').trim()));
+      const code = stdout.trim();
+      if (!code.startsWith('LUMI2-')) return reject(new Error((stderr || '签发失败').trim()));
+      resolve(code);
+    });
+  });
 }
 
 // ============ API 路由 ============
@@ -283,6 +407,109 @@ app.get('/api/revocations', (req, res) => {
   }
 });
 
+// ============ 支付宝购买（模拟网关先行，真实凭证后补） ============
+// 请求体：{ productId, device }
+// 成功：返回支付页 URL 与订单号。无支付宝凭证时返回内置模拟支付页。
+app.post('/api/alipay/order', (req, res) => {
+  const { productId, device } = req.body || {};
+  if (!productId || !device) {
+    return res.status(400).json({ error: 'productId、device 均为必填' });
+  }
+  const product = ALIPAY_PRODUCTS[productId];
+  const deviceText = String(device);
+  if (!product || !deviceText || deviceText.length > 200 || deviceText.startsWith('-')) {
+    return res.status(400).json({ error: '参数无效' });
+  }
+
+  const outTradeNo = `${product.outTradeNoPrefix}${Date.now()}-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+  const order = {
+    outTradeNo,
+    productId: product.id,
+    device: deviceText,
+    amount: product.amount,
+    subject: product.subject,
+    status: 'created',
+    createdAt: new Date().toISOString(),
+    paidAt: null,
+    licenseKey: null,
+  };
+  alipayOrders.set(outTradeNo, order);
+  res.json({
+    orderNo: outTradeNo,
+    amount: product.amount,
+    subject: product.subject,
+    paymentUrl: buildAlipayPaymentUrl(order),
+    sandbox: !config.alipayAppId || !config.alipayPrivateKey,
+  });
+});
+
+// 模拟网关：只在本机配置缺失时可用，用于打通「支付回调 → 自动发码」。
+app.get('/pay/sandbox/:orderNo', (req, res) => {
+  const order = alipayOrders.get(req.params.orderNo);
+  if (!order) return res.status(404).type('html').send('<h1>订单不存在</h1>');
+  const sandboxToken = process.env.LUMI_ALIPAY_SANDBOX_TOKEN || '';
+  res.type('html').send([
+    '<!doctype html><meta charset="utf-8"><title>Lumi 模拟支付</title>',
+    '<body style="font-family:-apple-system;max-width:420px;margin:12vh auto;text-align:center">',
+    `<h1>${order.subject}</h1><p>订单 ${order.outTradeNo}</p>`,
+    `<p>金额 ¥${order.amount}</p>`,
+    `<form method="post" action="/api/alipay/notify?token=${encodeURIComponent(sandboxToken)}">`,
+    '<input type="hidden" name="out_trade_no" value="' + order.outTradeNo + '">',
+    '<input type="hidden" name="trade_status" value="TRADE_SUCCESS">',
+    '<input type="hidden" name="total_amount" value="' + order.amount + '">',
+    '<button style="font-size:18px;padding:12px 24px">确认支付</button>',
+    '</form></body>',
+  ].join('\n'));
+});
+
+// 支付宝异步回调。真实网关提交 form；测试可直接提交 JSON。
+app.post('/api/alipay/notify', async (req, res) => {
+  const normalized = normalizeAlipayNotify(req.body);
+  const signatureValid = await verifyAlipaySignature(normalized);
+  const token = typeof req.query.token === 'string' ? req.query.token : '';
+  const sandboxToken = process.env.LUMI_ALIPAY_SANDBOX_TOKEN || '';
+  const trusted = signatureValid || (sandboxToken && token === sandboxToken);
+  if (!trusted) return res.status(403).send('invalid signature');
+
+  const order = alipayOrders.get(normalized.out_trade_no);
+  if (!order) return res.status(404).send('order not found');
+  if (normalized.trade_status !== 'TRADE_SUCCESS') return res.send('ignored');
+  if (Number(normalized.total_amount) !== Number(order.amount)) {
+    return res.status(400).send('amount mismatch');
+  }
+  if (order.status !== 'paid') {
+    try {
+      const licenseKey = await issuePaidLicense(order);
+      order.licenseKey = licenseKey;
+    } catch (err) {
+      order.status = 'issue_failed';
+      order.lastError = err.message;
+      console.error(`[alipay] license issue failed: ${err.message}`);
+      return res.status(500).send('issue failed');
+    }
+    order.status = 'paid';
+    order.paidAt = new Date().toISOString();
+  }
+  res.send('success');
+});
+
+// 客户端轮询：只返回订单状态，不发码，降低客户端误用面。
+app.get('/api/alipay/query', (req, res) => {
+  const orderNo = normalizeOutTradeNo(req.query.orderNo);
+  const device = typeof req.query.device === 'string' ? req.query.device : '';
+  if (!orderNo || !device || device.length > 200 || device.startsWith('-')) {
+    return res.status(400).json({ error: '参数无效' });
+  }
+  const order = alipayOrders.get(orderNo);
+  if (!order || order.device !== device) return res.status(404).json({ status: 'not_found' });
+  res.json({
+    status: order.status === 'created' ? 'waiting' : order.status,
+    amount: order.amount,
+    subject: order.subject,
+    licenseKey: order.licenseKey,
+  });
+});
+
 // ============ 启动服务 ============
 if (require.main === module) {
   app.listen(config.port, () => {
@@ -297,4 +524,16 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, isValidPEM, validateField, isValidEnvSyntax, escapeEnvValue, FIELD_LIMITS };
+module.exports = {
+  app,
+  isValidPEM,
+  validateField,
+  isValidEnvSyntax,
+  escapeEnvValue,
+  FIELD_LIMITS,
+  verifyAlipaySignature,
+  buildAlipaySignatureBase,
+  buildAlipayPaymentUrl,
+  alipayOrders,
+  ALIPAY_PRODUCTS,
+};

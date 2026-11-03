@@ -16,7 +16,7 @@ swift test  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 # 2. Node 后端
 cd ..
 npm test
-# 期望：41 pass / 0 fail
+# 期望：51 pass / 0 fail
 ```
 
 两条都绿才视为 harness 通过。任何新 commit 前都要跑；发布前必跑（见 spec.md 的发布约束）。
@@ -32,6 +32,9 @@ npm test
   播放中点击应在 ~1 秒内弹出系统分享面板（含 AirDrop / 邮件 / 备忘录）
 - 语法注解按钮：Premium 未解锁不显示；解锁后未播放时点击无反应；播放中点击应在 2-20 秒内
   显示 1-3 条小卡（失败给行内错误提示，不阻塞歌词主流程）
+- 支付宝后端链路（仅 curl，客户端无入口）：`POST /api/alipay/order` 无凭证时应返回
+  `sandbox: true` 与本地 `/pay/sandbox/...` 支付页；模拟回调命中后 `GET /api/alipay/query`
+  应返回 `paid` 并携带激活码。真实收款仍需公网 notify_url 与 `ALIPAY_PUBLIC_KEY` 验签。
 
 ## 打包与安装（macOS）
 

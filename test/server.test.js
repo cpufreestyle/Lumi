@@ -2,7 +2,18 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { app, isValidPEM, validateField, isValidEnvSyntax, escapeEnvValue, FIELD_LIMITS } = require('../server');
+const {
+  app,
+  isValidPEM,
+  validateField,
+  isValidEnvSyntax,
+  escapeEnvValue,
+  FIELD_LIMITS,
+  verifyAlipaySignature,
+  buildAlipaySignatureBase,
+  alipayOrders,
+  ALIPAY_PRODUCTS,
+} = require('../server');
 
 // ============ isValidPEM 单元测试 ============
 describe('isValidPEM', () => {
@@ -303,5 +314,90 @@ describe('GET /api/config-status', () => {
     if (res.body.keyId) {
       assert.ok(res.body.keyId.includes('***'));
     }
+  });
+});
+
+// ============ 支付宝购买链路测试 ============
+describe('支付宝购买链路', () => {
+  process.env.LUMI_ALIPAY_SANDBOX_TOKEN = 'test-sandbox-' + Date.now();
+
+  it('产品目录包含永久许可', () => {
+    assert.equal(ALIPAY_PRODUCTS.lifetime.amount, '68.00');
+    assert.ok(ALIPAY_PRODUCTS.lifetime.outTradeNoPrefix.startsWith('LUMIALI-'));
+  });
+
+  it('POST /api/alipay/order 缺少字段时返回 400', async () => {
+    const res = await request(app).post('/api/alipay/order').send({});
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes('必填'));
+  });
+
+  it('POST /api/alipay/order 产品或设备无效时返回 400', async () => {
+    const res = await request(app)
+      .post('/api/alipay/order')
+      .send({ productId: 'monthly', device: 'device' });
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes('无效'));
+  });
+
+  it('POST /api/alipay/order 无凭证时返回模拟支付页', async () => {
+    const res = await request(app)
+      .post('/api/alipay/order')
+      .send({ productId: 'lifetime', device: 'test-device' });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.orderNo.startsWith('LUMIALI-L'));
+    assert.equal(res.body.sandbox, process.env.ALIPAY_APP_ID ? undefined : true);
+    assert.ok(res.body.paymentUrl.startsWith('/pay/sandbox/'));
+    assert.ok(alipayOrders.has(res.body.orderNo));
+  });
+
+  it('GET /api/alipay/query 缺少字段时返回 400', async () => {
+    const res = await request(app).get('/api/alipay/query');
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes('无效'));
+  });
+
+  it('GET /api/alipay/query 不允许跨设备查询', async () => {
+    const created = await request(app)
+      .post('/api/alipay/order')
+      .send({ productId: 'lifetime', device: 'device-a' });
+    const res = await request(app)
+      .get(`/api/alipay/query?orderNo=${encodeURIComponent(created.body.orderNo)}&device=device-b`);
+    assert.equal(res.status, 404);
+    assert.equal(res.body.status, 'not_found');
+  });
+
+  it('回调缺 token 或有效签名时返回 403', async () => {
+    const created = await request(app)
+      .post('/api/alipay/order')
+      .send({ productId: 'lifetime', device: 'device-a' });
+    const res = await request(app)
+      .post('/api/alipay/notify')
+      .send({ out_trade_no: created.body.orderNo, trade_status: 'TRADE_SUCCESS' });
+    assert.equal(res.status, 403);
+  });
+
+  it('金额不匹配时返回 400', async () => {
+    const created = await request(app)
+      .post('/api/alipay/order')
+      .send({ productId: 'lifetime', device: 'device-a' });
+    const token = process.env.LUMI_ALIPAY_SANDBOX_TOKEN || '';
+    const res = await request(app)
+      .post(`/api/alipay/notify?token=${encodeURIComponent(token)}`)
+      .send({
+        out_trade_no: created.body.orderNo,
+        trade_status: 'TRADE_SUCCESS',
+        total_amount: '0.01',
+      });
+    assert.equal(res.status, 400);
+  });
+
+  it('签名 base 按 key 排序且剔除 sign 字段', () => {
+    const base = buildAlipaySignatureBase({ b: '2', a: '1', sign: 'ignored', empty: '' });
+    assert.equal(base, 'a=1&b=2');
+  });
+
+  it('公钥缺失或签名错误时验签失败', async () => {
+    assert.equal(await verifyAlipaySignature({ sign: 'bad' }), false);
   });
 });
