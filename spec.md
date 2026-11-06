@@ -11,9 +11,11 @@
   `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`（macOS 27 SDK 下 SwiftUIMacros 解析失败，逐次验证过）
 - CI 门禁：`.github/workflows/ci.yml` = 根 `npm test`（`node-server`）+ `windows` 端
   `tsc`/`vite` 编译（`windows-app`，跳过 Electron 二进制下载、不打包 NSIS）两条。
-  **Swift 全量不进 CI**：首跑实测本环境没有可调度的 macOS runner（`macos-26` 的 job 停在
-  queued、最终 cancelled / 0 steps；探针换 `macos-latest` 的 run jobs 列表为空），它只会把
-  整条 workflow 拖成 failure，所以退回本机执行；证据见 `harness.md`「更正（2026-11-07 首跑实测）」。
+  **Swift 全量暂不进 CI**：`macos-26` 标签没有 runner（job 停在 queued、最终 cancelled / 0 steps）；
+  换 `macos-latest` 有 runner、`swift build` 能过，但 `swift test` 在那台镜像上 621 tests 里
+  3 个失败（本机同套用例 0 failures），留着只会让 workflow 常红。先退回本机执行，
+  待定位这 3 个环境相关用例后再决定重新纳入；完整证据与我的两条误判更正见 `harness.md`
+  「更正（2026-11-07 首跑实测）」。
   SDK 绝对路径仍由 `scripts/ci/resolve-sdk.sh` 解析供本机命令使用——本机与 runner 的 26.5
   SDK 位置不同，找不到任何 26.x SDK 时脚本以退出码 1 终止，不静默回退到 27 SDK。
   CI 只覆盖编译与单测，实机行为自检与 Swift 全量仍是发布前置条件（执行方式见 `harness.md`）。

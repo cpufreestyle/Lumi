@@ -100,17 +100,24 @@ job，对应上面的本地门禁第 2、3 步；第 1 步（Swift 全量）不�
 ### 更正（2026-11-07 首跑实测）：Swift job 已从 CI 移除
 
 上一版 workflow 里有 `swift-macos`（`runs-on: macos-26`），假设本环境有可调度的 macOS runner。
-首跑证明这个假设不成立，以下是证据：
+首跑证明这个假设不成立，但**我随后写下的「换标签也没被调度」这条结论也错了**，一并更正：
 
-- run `42255217688`（commit `03b01fb`，`macos-26`）：`Swift 全量（build + LumiTests）` 停在
-  `queued`，始终没拿到 runner，最终 `status=completed / conclusion=cancelled / steps=0`。
-- 探针 run `42256803568`（commit `50c8184`，改 `runs-on: macos-latest`）：`jobs` 列表为空，
-  换标签也没被调度。
-- 同一批 `node-server` / `windows-app`（都是 `ubuntu-latest`）在 19s / 23s 内全绿，
-  反证问题不是 token 权限或网络，而是 macOS runner 池为空。
+- run `42255217688`（commit `03b01fb`，`macos-26`）：job 停在 `queued`，始终没拿到 runner，
+  最终 `status=completed / conclusion=cancelled / steps=0` —— `macos-26` 这个标签确实没有 runner。
+- 探针 run `42256803568`（commit `50c8184`，改 `runs-on: macos-latest`）：**这条其实被调度并跑完了**，
+  7 个 step 都在：`解析 macOS 26.5 SDK` success、`swift build` success、`swift test` **failure**，
+  日志汇总行 `Executed 621 tests, with 3 failures (0 unexpected)`。我之前看到 `jobs` 列表为空是
+  API 抖动的空响应，据此下「换标签也没被调度」的判断是误判。
+- 本机同一套用例（`swift test --sdk .../MacOSX26.5.sdk`）实测 621 tests / **0 failures**，
+  同批 `node-server` / `windows-app`（`ubuntu-latest`）19s / 23s 全绿。
 
-因此 Swift 门禁退回本机执行（本文件第 1 步），CI 只保留跑得动的两条。`scripts/ci/resolve-sdk.sh`
-仍然保留并继续用于本机命令。
+结论（修正版）：`macos-26` 无 runner；`macos-latest` 有 runner 且能编译，但那台镜像上有 3 个
+环境相关用例失败（本机全绿）。差异在 runner 镜像与本机环境不同，不是 token 也不是网络。
+在定位这 3 个用例之前，把它留在 CI 只会让 workflow 常红，所以 CI 先只保留跑得动的两条，
+Swift 全量退回本机执行（本文件第 1 步），`scripts/ci/resolve-sdk.sh` 继续为本机命令解析 SDK 路径。
+
+**待办（阻塞重新纳入 CI）**：拿到 `swift test` 失败用例名。目前 CI 日志端点持续
+`EOF`/490 空响应，取不到；下一步换 `gh run view --log` 或在 job 页面上直接看 step 5。
 
 要点：
 

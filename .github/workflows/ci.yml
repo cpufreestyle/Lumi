@@ -3,10 +3,14 @@ name: CI
 # 门禁与 harness.md 一一对应（CI 实跑两条，Swift 那条只在本机跑）：
 #   node-server  = harness 第 2 步（npm test，期望 51 pass / 0 fail）
 #   windows-app  = Windows 端编译门禁（tsc + vite，只做类型检查与产物构建，不打包 NSIS/不签名）
-#   harness 第 1 步（swift build + swift test，621 tests）不进 CI：本环境没有任何可调度的
-#   macOS runner。实测两次都不成立——runs-on: macos-26 的 run 42255217688 里 Swift job 停在
-#   queued、从未拿到 runner，最终以 conclusion=cancelled / 0 steps 收场；改试 macos-latest 的
-#   run 42256803568 至今 jobs 列表为空。两条 ubuntu 门禁同批全绿，反证不是签名/网络权限问题。
+#   harness 第 1 步（swift build + swift test，621 tests）暂不进 CI，实测分两段：
+#   ① runs-on: macos-26（run 42255217688）—— 该标签没有 runner，job 停在 queued，
+#      最终 conclusion=cancelled / steps=0。
+#   ② runs-on: macos-latest（探针 run 42256803568）—— 被正常调度并跑完 7 个 step，
+#      解析 SDK 与 swift build 都成功，swift test 失败：Executed 621 tests, with 3 failures。
+#      本机同一套用例 0 failures，同批两条 ubuntu 门禁 19s/23s 全绿。
+#   所以卡点是那台镜像上的 3 个环境相关用例，不是标签、token 或网络；在拿到失败用例名之前
+#   留在 CI 只会让 workflow 常红，先退回本机执行。详见 harness.md「更正（2026-11-07 首跑实测）」。
 # 两条全绿 + 本机 Swift 门禁通过才视为可合并；本地跑法见 harness.md，行为契约见 spec.md。
 
 on:
