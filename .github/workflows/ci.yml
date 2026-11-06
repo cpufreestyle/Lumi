@@ -23,8 +23,8 @@ jobs:
   swift-macos:
     name: Swift 全量（build + LumiTests）
     # spec.md 构建约束：必须用 macOS 26.5 SDK（macOS 27 SDK 下 SwiftUIMacros 解析失败）。
-    # macos-26 镜像带 Xcode 26.5/26.6，两者都含 MacOSX26.5.sdk；macos-14 已于 2026-11-02 停止支持。
-    runs-on: macos-26
+    # 探针：macos-26 在本环境始终 queued（无 runner 认领），先试 macos-latest 看能否被调度。
+    runs-on: macos-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
