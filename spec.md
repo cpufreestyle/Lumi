@@ -9,11 +9,14 @@
 - Swift 目标：macOS 14+；测试 target：LumiTests（依赖完整 Lumi target，含 AppKit/SwiftUI）
 - 构建约束：必须指定 `--sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk` 且
   `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`（macOS 27 SDK 下 SwiftUIMacros 解析失败，逐次验证过）
-- CI 门禁：`.github/workflows/ci.yml` = Swift 全量（`swift-macos`，`runs-on: macos-26`）+ 根
-  `npm test`（`node-server`）+ `windows` 端 `tsc`/`vite` 编译（`windows-app`，跳过 Electron 二进制
-  下载、不打包 NSIS）。SDK 绝对路径由 `scripts/ci/resolve-sdk.sh` 解析——本机与 runner 的 26.5
+- CI 门禁：`.github/workflows/ci.yml` = 根 `npm test`（`node-server`）+ `windows` 端
+  `tsc`/`vite` 编译（`windows-app`，跳过 Electron 二进制下载、不打包 NSIS）两条。
+  **Swift 全量不进 CI**：首跑实测本环境没有可调度的 macOS runner（`macos-26` 的 job 停在
+  queued、最终 cancelled / 0 steps；探针换 `macos-latest` 的 run jobs 列表为空），它只会把
+  整条 workflow 拖成 failure，所以退回本机执行；证据见 `harness.md`「更正（2026-11-07 首跑实测）」。
+  SDK 绝对路径仍由 `scripts/ci/resolve-sdk.sh` 解析供本机命令使用——本机与 runner 的 26.5
   SDK 位置不同，找不到任何 26.x SDK 时脚本以退出码 1 终止，不静默回退到 27 SDK。
-  CI 只覆盖编译与单测，实机行为自检仍是发布前置条件（执行方式见 `harness.md`）。
+  CI 只覆盖编译与单测，实机行为自检与 Swift 全量仍是发布前置条件（执行方式见 `harness.md`）。
 - 后端：`node server.js`，默认 PORT=3000，可由 `.env` 覆盖
 
 ## 行为契约（硬性约定）

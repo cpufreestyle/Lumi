@@ -1,10 +1,13 @@
 name: CI
 
-# 门禁与 harness.md 一一对应：
-#   swift-macos  = harness 第 1 步（swift build + swift test，期望 621 tests / 0 failures）
+# 门禁与 harness.md 一一对应（CI 实跑两条，Swift 那条只在本机跑）：
 #   node-server  = harness 第 2 步（npm test，期望 51 pass / 0 fail）
 #   windows-app  = Windows 端编译门禁（tsc + vite，只做类型检查与产物构建，不打包 NSIS/不签名）
-# 三条全绿才视为可合并；本地跑法见 harness.md，行为契约见 spec.md。
+#   harness 第 1 步（swift build + swift test，621 tests）不进 CI：本环境没有任何可调度的
+#   macOS runner。实测两次都不成立——runs-on: macos-26 的 run 42255217688 里 Swift job 停在
+#   queued、从未拿到 runner，最终以 conclusion=cancelled / 0 steps 收场；改试 macos-latest 的
+#   run 42256803568 至今 jobs 列表为空。两条 ubuntu 门禁同批全绿，反证不是签名/网络权限问题。
+# 两条全绿 + 本机 Swift 门禁通过才视为可合并；本地跑法见 harness.md，行为契约见 spec.md。
 
 on:
   push:
@@ -20,43 +23,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  swift-macos:
-    name: Swift 全量（build + LumiTests）
-    # spec.md 构建约束：必须用 macOS 26.5 SDK（macOS 27 SDK 下 SwiftUIMacros 解析失败）。
-    # 探针：macos-26 在本环境始终 queued（无 runner 认领），先试 macos-latest 看能否被调度。
-    runs-on: macos-latest
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: 解析 macOS 26.5 SDK
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "DEVELOPER_DIR=$(xcode-select -p)"
-          SDK="$(bash scripts/ci/resolve-sdk.sh)"
-          echo "选用 SDK：$SDK"
-          echo "SWIFT_SDK=$SDK" >> "$GITHUB_ENV"
-
-      - name: swift build
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd Lumi
-          swift build --sdk "$SWIFT_SDK"
-
-      - name: swift test
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd Lumi
-          swift test --sdk "$SWIFT_SDK" 2>&1 | tee /tmp/swift-test.log
-          {
-            echo "### Swift 单元测试"
-            grep -E "Executed [0-9]+ tests, with [0-9]+ failures" /tmp/swift-test.log | tail -1 || true
-            grep -E "Test run with [1-9][0-9]* tests" /tmp/swift-test.log | tail -1 || true
-          } >> "$GITHUB_STEP_SUMMARY"
-
   node-server:
     name: Node 后端（npm test）
     runs-on: ubuntu-latest

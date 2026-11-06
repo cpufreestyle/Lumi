@@ -89,14 +89,28 @@ npm run build:win    # 同时出 x64 与 arm64：Lumi-0.1.0-win-x64.exe / -win-a
 
 ## CI（自动化门禁）
 
-`.github/workflows/ci.yml` 在 push 到 main、每个 PR（含 Dependabot PR）和手动触发时跑三个
-job，与上面的本地门禁一一对应：
+`.github/workflows/ci.yml` 在 push 到 main、每个 PR（含 Dependabot PR）和手动触发时跑两个
+job，对应上面的本地门禁第 2、3 步；第 1 步（Swift 全量）不在 CI 里，理由见下方「更正」：
 
 | job | 内容 | 对应本地命令 | 基线（2026-11-04 本机实测） |
 | --- | --- | --- | --- |
-| `swift-macos` | `swift build` + `swift test` | 第 1 步 | 621 tests / 0 failures |
 | `node-server` | `npm ci` + `npm test` | 第 2 步 | 51 pass / 0 fail |
 | `windows-app` | `build:main`(tsc) + `build:renderer`(vite) | Windows 交叉打包的前半段 | tsc 无错、vite 26 modules |
+
+### 更正（2026-11-07 首跑实测）：Swift job 已从 CI 移除
+
+上一版 workflow 里有 `swift-macos`（`runs-on: macos-26`），假设本环境有可调度的 macOS runner。
+首跑证明这个假设不成立，以下是证据：
+
+- run `42255217688`（commit `03b01fb`，`macos-26`）：`Swift 全量（build + LumiTests）` 停在
+  `queued`，始终没拿到 runner，最终 `status=completed / conclusion=cancelled / steps=0`。
+- 探针 run `42256803568`（commit `50c8184`，改 `runs-on: macos-latest`）：`jobs` 列表为空，
+  换标签也没被调度。
+- 同一批 `node-server` / `windows-app`（都是 `ubuntu-latest`）在 19s / 23s 内全绿，
+  反证问题不是 token 权限或网络，而是 macOS runner 池为空。
+
+因此 Swift 门禁退回本机执行（本文件第 1 步），CI 只保留跑得动的两条。`scripts/ci/resolve-sdk.sh`
+仍然保留并继续用于本机命令。
 
 要点：
 
@@ -110,9 +124,10 @@ job，与上面的本地门禁一一对应：
   不跑 electron-builder/NSIS、不签名。这些仍需 Windows 实机，见上方「Windows 交叉打包」。
 - **CI 绿 ≠ 可发布**：实机行为级自检、GUI 行为、NSIS 安装流程都不在 CI 内（见「已知测试
   盲区」），发布前仍要按 `spec.md` 的发布约束手动跑一遍。
-- **required checks 不在本文件里生效**：job 名（`Swift 全量（build + LumiTests）`、
-  `Node 后端（npm test）`、`Windows 端编译（tsc + vite）`）要在仓库 Settings → Branch
-  protection 里勾成必过检查，才能真正让 bot PR「有人敢点 merge」。
+- **required checks 不在本文件里生效**：job 名（`Node 后端（npm test）`、
+  `Windows 端编译（tsc + vite）`）要在仓库 Settings → Branch protection 里勾成必过检查，
+  才能真正让 bot PR「有人敢点 merge」；Swift 那条既然不进 CI，就不可能有对应 required check，
+  改由发布流程在本机执行第 1 步兜底。
 
 ## 已知测试盲区
 
