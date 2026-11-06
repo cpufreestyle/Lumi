@@ -1,0 +1,126 @@
+name: CI
+
+# 门禁与 harness.md 一一对应：
+#   swift-macos  = harness 第 1 步（swift build + swift test，期望 621 tests / 0 failures）
+#   node-server  = harness 第 2 步（npm test，期望 51 pass / 0 fail）
+#   windows-app  = Windows 端编译门禁（tsc + vite，只做类型检查与产物构建，不打包 NSIS/不签名）
+# 三条全绿才视为可合并；本地跑法见 harness.md，行为契约见 spec.md。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  swift-macos:
+    name: Swift 全量（build + LumiTests）
+    # spec.md 构建约束：必须用 macOS 26.5 SDK（macOS 27 SDK 下 SwiftUIMacros 解析失败）。
+    # macos-26 镜像带 Xcode 26.5/26.6，两者都含 MacOSX26.5.sdk；macos-14 已于 2026-11-02 停止支持。
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析 macOS 26.5 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DEVELOPER_DIR=$(xcode-select -p)"
+          SDK="$(bash scripts/ci/resolve-sdk.sh)"
+          echo "选用 SDK：$SDK"
+          echo "SWIFT_SDK=$SDK" >> "$GITHUB_ENV"
+
+      - name: swift build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd Lumi
+          swift build --sdk "$SWIFT_SDK"
+
+      - name: swift test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd Lumi
+          swift test --sdk "$SWIFT_SDK" 2>&1 | tee /tmp/swift-test.log
+          {
+            echo "### Swift 单元测试"
+            grep -E "Executed [0-9]+ tests, with [0-9]+ failures" /tmp/swift-test.log | tail -1 || true
+            grep -E "Test run with [1-9][0-9]* tests" /tmp/swift-test.log | tail -1 || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  node-server:
+    name: Node 后端（npm test）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: npm ci
+        shell: bash
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: npm test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+
+  windows-app:
+    name: Windows 端编译（tsc + vite）
+    # 只验证类型检查与产物能构建；NSIS 打包/签名需要 Windows runner 与证书，不在本门禁内。
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: windows/package-lock.json
+
+      - name: npm ci
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          cd windows
+          npm ci
+
+      - name: 主进程 tsc
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          cd windows
+          npm run build:main
+
+      - name: 渲染进程 vite build
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          cd windows
+          npm run build:renderer

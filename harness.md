@@ -64,7 +64,7 @@ npm run build:win    # 同时出 x64 与 arm64：Lumi-0.1.0-win-x64.exe / -win-a
 - **arm64 只验证产物完整**（asar 内容 / PE 头 / 大小）：本机 Wine 是 Intel 二进制跑
   Rosetta，跑不了 PE32+ Aarch64（`ShellExecuteEx failed: Bad format.`），需真机。
 
-完整 UI 交互与 NSIS 安装流程两个架构都未验证。当前未接 CI。
+完整 UI 交互与 NSIS 安装流程两个架构都未验证；编译与单测门禁已接 CI，见下方「CI」小节。
 
 **校验 NSIS 安装包架构时不要读外层 PE 头。** 安装包外层是 NSIS 自带的引导 stub，
 它本身就是 32 位（`machine=0x14c i386`），与包内 payload 架构无关——三个包
@@ -86,6 +86,33 @@ npm run build:win    # 同时出 x64 与 arm64：Lumi-0.1.0-win-x64.exe / -win-a
 七档，32bpp，与 macOS 端同源），已确认嵌入 `Lumi.exe` 与三个 NSIS 安装包的资源段
 （2026-10-22 逐字节比对 ICO 内嵌 PNG 验证）。换图标时改 `Lumi/tools/make_icon.swift`
 后重跑 `Lumi/tools/make_app_icon.sh`，再重新生成 ico。
+
+## CI（自动化门禁）
+
+`.github/workflows/ci.yml` 在 push 到 main、每个 PR（含 Dependabot PR）和手动触发时跑三个
+job，与上面的本地门禁一一对应：
+
+| job | 内容 | 对应本地命令 | 基线（2026-11-04 本机实测） |
+| --- | --- | --- | --- |
+| `swift-macos` | `swift build` + `swift test` | 第 1 步 | 621 tests / 0 failures |
+| `node-server` | `npm ci` + `npm test` | 第 2 步 | 51 pass / 0 fail |
+| `windows-app` | `build:main`(tsc) + `build:renderer`(vite) | Windows 交叉打包的前半段 | tsc 无错、vite 26 modules |
+
+要点：
+
+- **SDK 不写死绝对路径**：由 `scripts/ci/resolve-sdk.sh` 解析。本机 26.5 SDK 在
+  `/Library/Developer/CommandLineTools/SDKs/`，macos-26 镜像里在 Xcode 内部，两处路径不同。
+  脚本找不到任何 macOS 26.x SDK 时以退出码 1 结束，**不回退到 27 SDK**——`spec.md` 记过
+  27 SDK 下 SwiftUIMacros 解析失败，静默回退只会产出一堆看不懂的宏错误。
+- **`runs-on: macos-26`**：镜像带 Xcode 26.5/26.6，两者都含 `MacOSX26.5.sdk`；macos-14 已于
+  2026-11-02 停止支持。
+- **Windows job 只编译不打包**：`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 跳过 Electron 二进制，
+  不跑 electron-builder/NSIS、不签名。这些仍需 Windows 实机，见上方「Windows 交叉打包」。
+- **CI 绿 ≠ 可发布**：实机行为级自检、GUI 行为、NSIS 安装流程都不在 CI 内（见「已知测试
+  盲区」），发布前仍要按 `spec.md` 的发布约束手动跑一遍。
+- **required checks 不在本文件里生效**：job 名（`Swift 全量（build + LumiTests）`、
+  `Node 后端（npm test）`、`Windows 端编译（tsc + vite）`）要在仓库 Settings → Branch
+  protection 里勾成必过检查，才能真正让 bot PR「有人敢点 merge」。
 
 ## 已知测试盲区
 
